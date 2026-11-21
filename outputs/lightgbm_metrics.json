@@ -1,0 +1,10 @@
+{
+  "model": "LightGBM",
+  "validation_method": "Stratified random holdout",
+  "train_rows": 246008,
+  "test_rows": 61503,
+  "roc_auc": 0.7022800446451775,
+  "pr_auc": 0.1845546719218481,
+  "ks": 0.3009365783342359,
+  "brier_score": 0.07067023944730338
+}

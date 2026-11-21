@@ -1,0 +1,11 @@
+{
+  "model": "Logistic Regression",
+  "validation_method": "Stratified random holdout",
+  "train_rows": 246008,
+  "test_rows": 61503,
+  "target_rate_test": 0.08072776937710356,
+  "roc_auc": 0.6826995306243069,
+  "pr_auc": 0.1627978351668383,
+  "ks": 0.2689993704204931,
+  "brier_score": 0.07156145847136425
+}

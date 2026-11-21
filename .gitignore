@@ -1,0 +1,13 @@
+.venv/
+.venv_intel_backup/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+*.log
+outputs/*.joblib
+outputs/*predictions*.csv
+outputs/holdout_predictions.csv
+.claude/
+.streamlit/secrets.toml
