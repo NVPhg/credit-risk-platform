@@ -13,7 +13,7 @@ from a PostgreSQL feature mart to a validated LightGBM challenger and an interac
 
 [**Live demo**](#live-demo) · [Architecture](#architecture) · [Results](#experimental-results) · [Validation findings](#model-validation-findings) · [Limitations](#limitations) · [Run it](#getting-started)
 
-![Dashboard overview](docs/screenshots/overview.jpg)
+![Dashboard overview](docs/screenshots/screenshot.png)
 
 </div>
 
