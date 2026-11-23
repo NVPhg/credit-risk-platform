@@ -1,5 +1,7 @@
 <div align="center">
 
+![Credit Risk Intelligence](docs/banner.png)
+
 # Credit Risk Intelligence
 
 **End-to-end probability-of-default modelling on 307,511 consumer-credit applicants:
@@ -12,8 +14,6 @@ from a PostgreSQL feature mart to a validated LightGBM challenger and an interac
 ![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?logo=streamlit&logoColor=white)
 
 [**Live demo**](#live-demo) · [**📄 Validation report (PDF)**](docs/Model_Validation_Report.pdf) · [Architecture](#architecture) · [Results](#experimental-results) · [Validation findings](#model-validation-findings) · [Limitations](#limitations) · [Run it](#getting-started)
-
-![Dashboard overview](docs/screenshots/screenshot.png)
 
 </div>
 
@@ -43,6 +43,19 @@ Lenders must decide, at application time, how likely an applicant is to run into
 | **Policy Simulator** | Do policy rules add value beyond the score? Score cut-off plus knock-out rules (installment shortfall, prior refusals, bureau exposure, affordability), decline waterfall with the bad rate of each rule's declines, and swap-set analysis of benchmark vs challenger |
 | **Applicant Explorer** | Why did *this* applicant get *this* score? TreeSHAP contributions, reason codes and a live what-if simulator |
 | **Model Validation** | Bank-style Green/Amber/Red validation scorecard with an overall rating, binomial calibration test per grade, Hosmer–Lemeshow, PSI/CSI stability, data-quality assertions, SHAP vs gain importance, PDF report download |
+
+### Screenshots
+
+| | |
+|:---:|:---:|
+| ![Overview with model card](docs/screenshots/01_overview.jpg) | ![Validation scorecard](docs/screenshots/08_validation_scorecard.jpg) |
+| **Overview:** model card, KPIs and key findings | **Model Validation:** Green/Amber/Red scorecard and overall rating |
+| ![Policy simulator](docs/screenshots/05_policy_simulator.jpg) | ![Swap-set analysis](docs/screenshots/06_swap_set.jpg) |
+| **Policy Simulator:** knock-out rules and decline waterfall | **Swap-set:** benchmark vs challenger at equal approval |
+| ![Credit-risk diagnostics](docs/screenshots/03_diagnostics.jpg) | ![Approval-rate trade-off](docs/screenshots/04_credit_strategy.jpg) |
+| **Diagnostics:** KS, Lorenz/Gini, score distribution, gains table | **Credit Strategy:** cut-off, bad-rate and profit trade-off |
+| ![Applicant explorer](docs/screenshots/07_applicant_explorer.jpg) | ![Portfolio insights](docs/screenshots/02_portfolio_insights.jpg) |
+| **Applicant Explorer:** credit decision with reason codes | **Portfolio Insights:** risk by segment |
 
 ---
 
@@ -278,6 +291,7 @@ credit-risk-platform/
 ├── app.py                        # Streamlit dashboard (7 tabs)
 ├── risk_metrics.py               # KS, Gini, HL, binomial, PSI, RAG rules
 ├── build_validation_report.py    # bank-style validation report (PDF)
+├── scripts/                      # screenshot capture and banner rendering
 ├── train_model.py                # baseline: Logistic Regression
 ├── compare_models.py             # challenger: LightGBM
 ├── validate_models.py            # paired bootstrap + validation report
@@ -288,6 +302,7 @@ credit-risk-platform/
 │   └── dashboard/                # compact assets read by the app
 ├── docs/
 │   ├── Model_Validation_Report.pdf
+│   ├── banner.png
 │   └── screenshots/
 ├── .streamlit/config.toml        # dark theme
 ├── requirements.txt

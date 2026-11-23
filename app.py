@@ -5,6 +5,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import precision_recall_curve, roc_curve
@@ -17,9 +18,9 @@ from risk_metrics import (
 
 st.set_page_config(
     page_title="Credit Risk Intelligence",
-    page_icon="🏦",
+    page_icon=":material/query_stats:",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="auto",
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -143,7 +144,51 @@ PORTFOLIO_RATE = pred["target"].mean()
 # ---------------------------------------------------------------- styling
 st.markdown(f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 .stApp {{ background: {NAVY}; color: {TEXT}; }}
+.stApp, .stApp p, .stApp li, .stApp label, .stApp input, .stApp button, .stApp td, .stApp th,
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp [data-testid="stMetricValue"],
+.stApp [data-testid="stMetricLabel"], .stApp [data-baseweb="tab"], .stApp .stCaption,
+.stApp [data-testid="stMarkdownContainer"] {{ font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; }}
+.stApp h3 {{ font-weight: 700; letter-spacing: -0.3px; }}
+[data-testid="stSidebar"] {{ background: #0B1422; border-right: 1px solid {BORDER}; }}
+.brand {{ display: flex; align-items: center; gap: 12px; }}
+.brand svg {{ flex: none; }}
+.hero {{ display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 28px; align-items: stretch; margin-bottom: 26px; }}
+@media (max-width: 1000px) {{ .hero {{ grid-template-columns: 1fr; }} }}
+.card {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 16px; padding: 20px 22px; }}
+.mc-head {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }}
+.mc-title {{ color: {MUTED}; font-size: 12px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; }}
+.status {{ font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid; }}
+.mc-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin: 14px 0 12px; }}
+.mc-grid .k {{ color: {MUTED}; font-size: 12px; }}
+.mc-grid .v {{ color: {TEXT}; font-size: 14px; font-weight: 600; }}
+.dots {{ display: flex; gap: 6px; margin: 6px 0 6px; flex-wrap: wrap; }}
+.dot {{ width: 22px; height: 8px; border-radius: 4px; }}
+.mc-foot {{ color: {MUTED}; font-size: 12px; }}
+.kpis {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 4px 0 8px; }}
+@media (max-width: 900px) {{ .kpis {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+.kpi {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 14px; padding: 16px 18px; position: relative; overflow: hidden; }}
+.kpi::before {{ content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent, {TEAL}); }}
+.kpi .l {{ color: {MUTED}; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; }}
+.kpi .v {{ color: #F3F7FC; font-size: clamp(22px, 2.1vw, 30px); font-weight: 800; letter-spacing: -0.8px; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }}
+.kpi .s {{ color: {MUTED}; font-size: 13px; }}
+.kpi .s b {{ color: var(--accent, {TEAL}); font-weight: 700; }}
+.section {{ margin: 26px 0 12px; }}
+.section .eyebrow {{ color: {TEAL}; font-size: 11.5px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }}
+.section h3 {{ margin: 4px 0 4px; font-size: 24px; padding: 0; }}
+.section p {{ color: {MUTED}; margin: 0; font-size: 14.5px; max-width: 980px; }}
+.decision {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 16px; padding: 18px 22px; margin: 6px 0 16px; border-left: 5px solid var(--dc); }}
+.decision .top {{ display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }}
+.decision .lbl {{ color: {MUTED}; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; }}
+.decision .val {{ color: var(--dc); font-size: 26px; font-weight: 800; }}
+.decision .why {{ color: {MUTED}; font-size: 13.5px; }}
+.decision ol {{ margin: 10px 0 0 0; padding-left: 20px; }}
+.decision li {{ margin: 3px 0; }}
+.side-links a {{ color: {TEAL} !important; text-decoration: none; }}
+.side-note {{ color: {MUTED}; font-size: 12.5px; line-height: 1.5; }}
+.badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }}
+.badge {{ font-size: 11.5px; padding: 3px 9px; border-radius: 6px; background: {PANEL}; border: 1px solid {BORDER}; color: {TEXT}; }}
 .block-container {{ max-width: 1450px; padding-top: 3.5rem; }}
 [data-testid="stMetric"] {{
     background: {PANEL}; border: 1px solid {BORDER};
@@ -210,12 +255,91 @@ def insight(title, body):
     )
 
 
+LOGO_SVG = f"""<svg width="{{s}}" height="{{s}}" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<defs><linearGradient id="{{gid}}" x1="0" y1="1" x2="1" y2="0">
+<stop offset="0" stop-color="{BLUE}"/><stop offset="1" stop-color="{TEAL}"/></linearGradient></defs>
+<rect x="1.5" y="1.5" width="37" height="37" rx="10" fill="{PANEL}" stroke="{BORDER}"/>
+<rect x="9" y="22" width="5" height="9" rx="1.5" fill="url(#{{gid}})" opacity=".55"/>
+<rect x="17.5" y="16" width="5" height="15" rx="1.5" fill="url(#{{gid}})" opacity=".8"/>
+<rect x="26" y="10" width="5" height="21" rx="1.5" fill="url(#{{gid}})"/>
+<path d="M8 17 L18 11 L24 14 L32 7" fill="none" stroke="{ORANGE}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>"""
+
+
+def logo(size=40, gid="logo"):
+    return LOGO_SVG.replace("{s}", str(size)).replace("{gid}", f"grad-{gid}")
+
+
+def section(eyebrow, title, description=None):
+    desc = f"<p>{description}</p>" if description else ""
+    st.markdown(
+        f'<div class="section"><div class="eyebrow">{eyebrow}</div><h3>{title}</h3>{desc}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def kpi_cards(items):
+    """items: list of (label, value, sub_html, accent_color)."""
+    cards = "".join(
+        f'<div class="kpi" style="--accent:{accent}"><div class="l">{lbl}</div>'
+        f'<div class="v">{value}</div><div class="s">{sub}</div></div>'
+        for lbl, value, sub, accent in items
+    )
+    st.markdown(f'<div class="kpis">{cards}</div>', unsafe_allow_html=True)
+
+
+ADVERSE_REASONS = {
+    "employment_years": "Short length of current employment",
+    "employment_sentinel_flag": "Not currently in employment",
+    "refused_count": "Number of previously refused applications",
+    "approval_rate": "Low approval rate on previous applications",
+    "approved_count": "Limited history of approved applications",
+    "previous_application_count": "Number of previous applications",
+    "credit_amount": "Size of the requested credit amount",
+    "annuity_amount": "Size of the monthly instalment",
+    "credit_to_income": "Credit amount is high relative to income",
+    "annuity_to_income": "Instalment is high relative to income",
+    "annual_income": "Level of declared income",
+    "due_date_shortfall_rate": "History of paying less than the amount due by the due date",
+    "due_date_shortfall_count": "Number of instalments short at the due date",
+    "observed_underpaid_count": "Underpaid instalments in repayment history",
+    "multiple_payment_count": "Instalments repaid in several partial payments",
+    "installment_count": "Limited length of repayment history",
+    "valid_installment_count": "Limited length of repayment history",
+    "incomplete_installment_count": "Incomplete instalment records",
+    "has_installment_history": "No repayment history with the lender",
+    "active_loan_count": "Number of active loans at other lenders",
+    "bureau_loan_count": "Number of loans reported to the credit bureau",
+    "avg_bureau_credit": "Average credit amount held at other lenders",
+    "education_type": "Education level",
+    "income_type": "Source of income",
+    "contract_type": "Type of credit product requested",
+}
+
+
+FONT = "Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"
+pio.templates["cri"] = go.layout.Template(
+    layout=dict(
+        font=dict(family=FONT, size=12, color="#DCE6F3"),
+        colorway=[TEAL, BLUE, ORANGE, RED, "#B490FF", "#7BD88F"],
+        title=dict(font=dict(family=FONT, size=14, color=TEXT), x=0, xanchor="left"),
+        hoverlabel=dict(bgcolor=NAVY, bordercolor=BORDER, font=dict(family=FONT, color=TEXT)),
+        xaxis=dict(title=dict(font=dict(color=MUTED, size=12)), tickfont=dict(color=MUTED),
+                   linecolor=BORDER, ticks=""),
+        yaxis=dict(title=dict(font=dict(color=MUTED, size=12)), tickfont=dict(color=MUTED),
+                   linecolor=BORDER, ticks=""),
+        legend=dict(font=dict(color=TEXT, size=12), bgcolor="rgba(0,0,0,0)"),
+        bargap=0.25,
+    )
+)
+pio.templates.default = "plotly_dark+cri"
+
+
 def chart_style(fig, height=360):
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_dark+cri",
         paper_bgcolor=PANEL,
         plot_bgcolor=PANEL,
-        font=dict(color="#DCE6F3"),
         height=height,
         margin=dict(l=35, r=20, t=35, b=45),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -420,7 +544,7 @@ def lorenz_chart():
     fig = go.Figure()
     bad_rate = PORTFOLIO_RATE
     fig.add_trace(go.Scatter(
-        x=[0, bad_rate * 100, 100], y=[0, 100, 100], name="Perfect model",
+        x=[0, bad_rate * 100, 100], y=[0, 100, 100], name="Perfect model", mode="lines",
         line=dict(color=MUTED, dash="dot", width=1.5),
     ))
     for name, (column, color) in reversed(MODELS.items()):
@@ -430,12 +554,15 @@ def lorenz_chart():
             name=f"{name} · Gini {gini:.3f}", line=dict(color=color, width=3),
         ))
     fig.add_trace(go.Scatter(
-        x=[0, 100], y=[0, 100], name="Random", line=dict(color=MUTED, dash="dash"),
+        x=[0, 100], y=[0, 100], name="Random", mode="lines", line=dict(color=MUTED, dash="dash"),
     ))
     fig.update_layout(
         xaxis_title="Applicants declined, riskiest first (%)", yaxis_title="Bads captured (%)",
     )
-    return chart_style(fig, 380)
+    chart_style(fig, 380)
+    fig.update_layout(legend=dict(orientation="v", x=0.98, y=0.04, xanchor="right", yanchor="bottom",
+                                  bgcolor="rgba(14,25,41,0.85)", bordercolor=BORDER, borderwidth=1))
+    return fig
 
 
 def score_distribution_chart(column, color):
@@ -483,33 +610,114 @@ def scorecard(model):
 
 # ---------------------------------------------------------------- header
 best = data["bootstrap"].set_index("Metric")
+card_table, card_rating = scorecard("LightGBM")
+card_color = (
+    RAG_COLORS["Red"] if card_rating.startswith("Not")
+    else RAG_COLORS["Amber"] if "conditions" in card_rating else RAG_COLORS["Green"]
+)
+card_counts = card_table["status"].value_counts()
+dots = "".join(
+    f'<span class="dot" title="{r.test}: {r.status}" style="background:{RAG_COLORS[r.status]}"></span>'
+    for r in card_table.itertuples()
+)
+_, card_gini = rm.lorenz_curve(pred["target"], pred["lightgbm_score"])
+
+with st.sidebar:
+    st.markdown(
+        f'<div class="brand">{logo(36, "side")}<div><b>Credit Risk Intelligence</b><br>'
+        f'<span class="side-note">Application PD model · v1.0</span></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    st.markdown(
+        '<div class="side-note">An end-to-end credit-risk project: PostgreSQL feature mart → '
+        "Logistic Regression benchmark vs LightGBM challenger → independent validation → "
+        "credit-policy decisioning.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="side-links" style="margin-top:14px">'
+        '<a href="https://github.com/NVPhg/credit-risk-platform" target="_blank">↗ Source code on GitHub</a></div>',
+        unsafe_allow_html=True,
+    )
+    side_pdf = ROOT / "docs" / "Model_Validation_Report.pdf"
+    if side_pdf.exists():
+        st.download_button(
+            "Validation report (PDF)", side_pdf.read_bytes(),
+            file_name="Model_Validation_Report.pdf", mime="application/pdf",
+            icon=":material/description:", width="stretch", key="side_pdf",
+        )
+    st.markdown("**Built with**")
+    st.markdown(
+        '<div class="badges">' + "".join(
+            f'<span class="badge">{t}</span>' for t in [
+                "PostgreSQL", "SQL", "Python", "pandas", "scikit-learn", "LightGBM",
+                "TreeSHAP", "SciPy", "Plotly", "Streamlit",
+            ]
+        ) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    st.markdown(
+        '<div class="side-note">Data: Home Credit Default Risk (Kaggle), 307,511 applicants. '
+        "TARGET is a payment-difficulty flag, not a regulatory default definition. "
+        "Portfolio project, not a production decisioning system.</div>",
+        unsafe_allow_html=True,
+    )
+
 st.markdown(f"""
-<div class="hero-label">RISK ANALYTICS · MODEL VALIDATION · CREDIT STRATEGY</div>
-<div class="hero-title">Credit Risk Intelligence</div>
-<div class="hero-subtitle">
-End-to-end probability-of-default modelling on 307,511 Home Credit applicants —
-from a PostgreSQL feature mart to a validated challenger model and an approval strategy.
-</div>
-<div class="chips">
-  <span class="chip">PostgreSQL feature mart</span>
-  <span class="chip">58M+ source rows</span>
-  <span class="chip">Logistic Regression vs LightGBM</span>
-  <span class="chip">Paired bootstrap CIs</span>
-  <span class="chip">TreeSHAP reason codes</span>
-  <span class="chip">Score scaling & cut-off strategy</span>
+<div class="hero">
+  <div>
+    <div class="brand">{logo(44, "hero")}
+      <div class="hero-label">RISK ANALYTICS · MODEL VALIDATION · CREDIT POLICY</div>
+    </div>
+    <div class="hero-title">Credit Risk Intelligence</div>
+    <div class="hero-subtitle">
+      End-to-end probability-of-default modelling on 307,511 consumer-loan applicants,
+      from a PostgreSQL feature mart to an independently validated challenger model and a
+      credit-policy decision framework.
+    </div>
+    <div class="chips">
+      <span class="chip">PostgreSQL feature mart · 58M+ rows</span>
+      <span class="chip">Logistic Regression vs LightGBM</span>
+      <span class="chip">Bootstrap · KS · Gini · PSI</span>
+      <span class="chip">TreeSHAP reason codes</span>
+      <span class="chip">Scorecard & cut-off strategy</span>
+      <span class="chip">Policy simulator</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="mc-head">
+      <div class="mc-title">Model card</div>
+      <span class="status" style="color:{card_color};border-color:{card_color}66;background:{card_color}1A">{card_rating}</span>
+    </div>
+    <div class="mc-grid">
+      <div><div class="k">Model</div><div class="v">LightGBM challenger v1.0</div></div>
+      <div><div class="k">Benchmark</div><div class="v">Logistic Regression</div></div>
+      <div><div class="k">Use</div><div class="v">Application PD · grading · cut-off</div></div>
+      <div><div class="k">Validation sample</div><div class="v">{len(pred):,} applicants</div></div>
+      <div><div class="k">Gini / KS</div><div class="v">{card_gini:.3f} / {lightgbm['ks']:.3f}</div></div>
+      <div><div class="k">Bad rate (holdout)</div><div class="v">{PORTFOLIO_RATE:.2%}</div></div>
+    </div>
+    <div class="mc-title" style="font-size:11px">Validation tests</div>
+    <div class="dots">{dots}</div>
+    <div class="mc-foot">{card_counts.get('Green', 0)} green · {card_counts.get('Amber', 0)} amber ·
+      {card_counts.get('Red', 0)} red · {card_counts.get('Not assessed', 0)} not assessed.
+      Details in the Model Validation tab.</div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
 (
     overview, insights_tab, models_tab, strategy_tab, policy_tab, applicant_tab, validation_tab
 ) = st.tabs([
-    "Overview",
-    "Portfolio Insights",
-    "Model Comparison",
-    "Credit Strategy",
-    "Policy Simulator",
-    "Applicant Explorer",
-    "Model Validation",
+    ":material/space_dashboard: Overview",
+    ":material/pie_chart: Portfolio Insights",
+    ":material/compare_arrows: Model Comparison",
+    ":material/tune: Credit Strategy",
+    ":material/rule: Policy Simulator",
+    ":material/person_search: Applicant Explorer",
+    ":material/verified: Model Validation",
 ])
 
 # ================================================================= OVERVIEW
@@ -519,17 +727,6 @@ with overview:
     lift = top["target_rate"] / PORTFOLIO_RATE
     capture = top["cases"] / pred["target"].sum()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Applicants", "307,511", border=True)
-    c2.metric("Holdout applicants", f"{len(pred):,}", border=True)
-    c3.metric("TARGET = 1 rate", f"{PORTFOLIO_RATE:.2%}", border=True)
-    c4.metric(
-        "LightGBM ROC-AUC", f"{lightgbm['roc_auc']:.4f}",
-        delta=f"+{lightgbm['roc_auc'] - logistic['roc_auc']:.4f}",
-        border=True,
-    )
-
-    st.subheader("Key findings")
     lgb_curve = strategy_curve("lightgbm_score", 0.10, 0.50)
     log_curve = strategy_curve("logistic_score", 0.10, 0.50)
     lgb80, log80 = at_approval(lgb_curve, 0.80), at_approval(log_curve, 0.80)
@@ -537,6 +734,16 @@ with overview:
     auc_ci = best.loc["ROC-AUC"]
     gap = data["gap"].set_index("Model")
 
+    kpi_cards([
+        ("Applicants modelled", "307,511", f"{len(pred):,} in the validation holdout", BLUE),
+        ("Portfolio bad rate", f"{PORTFOLIO_RATE:.2%}", "TARGET = 1 on the holdout", ORANGE),
+        ("LightGBM Gini", f"{card_gini:.3f}",
+         f"<b>{card_gini - rm.lorenz_curve(pred['target'], pred['logistic_score'])[1]:+.3f}</b> vs benchmark", TEAL),
+        ("Bad rate at 80% approval", f"{lgb80['bad_rate']:.2%}",
+         f"<b>{(lgb80['bad_rate'] - log80['bad_rate']) * 100:+.2f} pp</b> vs benchmark", TEAL),
+    ])
+
+    section("Executive summary", "Key findings")
     i1, i2, i3 = st.columns(3)
     with i1:
         insight(
@@ -563,17 +770,25 @@ with overview:
             "shows no gap. Early stopping and stronger regularisation are next.",
         )
 
-    st.subheader("Risk concentration & discrimination")
+    section(
+        "Performance", "Risk concentration & discrimination",
+        "Applicants ranked by LightGBM score: the riskiest decile carries more than "
+        "a quarter of all payment-difficulty cases.",
+    )
     left, right = st.columns(2)
     with left:
         show(decile_chart(deciles), "overview_deciles")
     with right:
         show(roc_chart(), "overview_roc")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Top-decile risk lift", f"{lift:.2f}x", border=True)
-    c2.metric("Positive cases in top decile", f"{capture:.1%}", border=True)
-    c3.metric("LightGBM KS", f"{lightgbm['ks']:.4f}", border=True)
+    kpi_cards([
+        ("Top-decile lift", f"{lift:.2f}x", "Bad rate of riskiest 10% vs portfolio", TEAL),
+        ("Bads in top decile", f"{capture:.1%}", "Share of all cases captured", TEAL),
+        ("KS statistic", f"{lightgbm['ks']:.3f}",
+         f"<b>{lightgbm['ks'] - logistic['ks']:+.3f}</b> vs benchmark", BLUE),
+        ("ROC-AUC", f"{lightgbm['roc_auc']:.3f}",
+         f"<b>{lightgbm['roc_auc'] - logistic['roc_auc']:+.3f}</b> vs benchmark", BLUE),
+    ])
 
     with st.expander("How the pipeline works"):
         st.markdown("""
@@ -600,10 +815,10 @@ with overview:
 
 # ================================================================= INSIGHTS
 with insights_tab:
-    st.subheader("Where does risk sit in the portfolio?")
-    st.caption(
-        "Descriptive TARGET rates across all 307,511 applicants, computed from the "
-        "PostgreSQL feature mart. Segments with fewer than 100 applicants are hidden."
+    section(
+        "Portfolio insights", "Where does risk sit in the portfolio?",
+        "Descriptive TARGET rates across all 307,511 applicants, computed from the PostgreSQL "
+        "feature mart. Segments with fewer than 100 applicants are hidden.",
     )
     segments = data["segments"]
     segments = segments[segments["applicants"] >= 100]
@@ -673,7 +888,10 @@ with insights_tab:
 
 # ================================================================= MODELS
 with models_tab:
-    st.subheader("Baseline vs challenger")
+    section(
+        "Benchmarking", "Baseline vs challenger",
+        "Both models are scored on the identical 61,503-applicant holdout.",
+    )
     st.dataframe(
         data["comparison"],
         width="stretch",
@@ -709,11 +927,10 @@ with models_tab:
             "lower tree complexity and an out-of-time test before any deployment."
         )
 
-    st.subheader("Credit-risk diagnostics")
-    st.caption(
-        "The standard views a credit-risk or model-validation team reviews before "
-        "accepting a scorecard: separation (KS), concentration (Lorenz / Gini), score "
-        "distributions and the decile gains table."
+    section(
+        "Diagnostics", "Credit-risk diagnostics",
+        "The standard views a credit-risk or model-validation team reviews before accepting a "
+        "scorecard: separation (KS), concentration (Lorenz / Gini), score distributions and the gains table.",
     )
     diag_model = st.segmented_control(
         "Model", list(MODELS), default="LightGBM", key="diag_model"
@@ -758,7 +975,7 @@ with models_tab:
 
 # ================================================================= STRATEGY
 with strategy_tab:
-    st.subheader("From probability to decision")
+    section("Decisioning", "From probability to decision")
     st.caption(
         f"PDs are converted to a points-based score: {BASE_SCORE} points at "
         f"good:bad odds of {BASE_ODDS}:1, and every {PDO} points doubles the odds "
@@ -831,7 +1048,7 @@ with strategy_tab:
             st.warning("Observed rate is not monotonic across grades — review band cut-offs.")
 
     # ---- approval strategy
-    st.subheader("Approval-rate trade-off")
+    section("Cut-off strategy", "Approval-rate trade-off")
     curve = strategy_curve(column, margin, lgd)
     other_name = next(m for m in MODELS if m != model_choice)
     other_curve = strategy_curve(MODELS[other_name][0], margin, lgd)
@@ -845,27 +1062,18 @@ with strategy_tab:
     other_row = at_approval(other_curve, approval)
     approve_all = curve.iloc[-1]
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric(
-        "Score cut-off",
-        f"{pd_to_score(row['cutoff_pd']):.0f}",
-        help="Approve applicants scoring at or above this value",
-    )
-    k2.metric(
-        "Bad rate of approved", f"{row['bad_rate']:.2%}",
-        delta=f"{(row['bad_rate'] - other_row['bad_rate']) * 100:+.2f} pp vs {other_name}",
-        delta_color="inverse",
-    )
-    k3.metric(
-        "Problem loans declined",
-        f"{1 - row['bad_rate'] * approval / PORTFOLIO_RATE:.1%}",
-        help="Share of all TARGET = 1 applicants that this cut-off rejects",
-    )
-    k4.metric(
-        "Profit vs approve-all",
-        fmt_money(row["profit"] - approve_all["profit"]),
-        help="Illustrative, using credit amount and the revenue/loss assumptions above",
-    )
+    bad_diff = (row["bad_rate"] - other_row["bad_rate"]) * 100
+    profit_diff = row["profit"] - approve_all["profit"]
+    kpi_cards([
+        ("Score cut-off", f"{pd_to_score(row['cutoff_pd']):.0f}",
+         "Approve at or above this score", BLUE),
+        ("Bad rate of approved", f"{row['bad_rate']:.2%}",
+         f"<b>{bad_diff:+.2f} pp</b> vs {other_name}", TEAL if bad_diff <= 0 else RED),
+        ("Problem loans declined", f"{1 - row['bad_rate'] * approval / PORTFOLIO_RATE:.1%}",
+         "Share of all TARGET = 1 rejected", ORANGE),
+        ("Profit vs approve-all", fmt_money(profit_diff),
+         "Illustrative economics", TEAL if profit_diff >= 0 else RED),
+    ])
 
     sample = curve.iloc[np.linspace(0, len(curve) - 1, 400).astype(int)]
     other_sample = other_curve.iloc[np.linspace(0, len(other_curve) - 1, 400).astype(int)]
@@ -916,7 +1124,7 @@ with strategy_tab:
     )
 
     # ---- fairness
-    st.subheader("Fairness review by age band")
+    section("Fair lending", "Fairness review by age band")
     approved_mask = pred[column].to_numpy() <= row["cutoff_pd"]
     age_band = pd.cut(
         pred["age_years"], [0, 25, 35, 45, 55, 65, 120],
@@ -971,7 +1179,7 @@ with strategy_tab:
 
 # ================================================================= POLICY
 with policy_tab:
-    st.subheader("Policy simulator")
+    section("Credit policy", "Policy simulator")
     st.caption(
         "Combine a score cut-off with knock-out rules, as a credit-policy team would, and see "
         "the effect on approval rate, bad rate and profit. Rules apply in order; each row of "
@@ -1050,15 +1258,14 @@ with policy_tab:
     score_only_bad = y_all[score_only].mean()
 
     with results:
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Approval rate", f"{appr_rate:.1%}", border=True)
-        k2.metric(
-            "Bad rate of approved", f"{bad_rate_appr:.2%}",
-            delta=f"{(bad_rate_appr - PORTFOLIO_RATE) * 100:+.2f} pp vs portfolio",
-            delta_color="inverse", border=True,
-        )
-        k3.metric("Problem loans declined", f"{bads_declined:.1%}", border=True)
-        k4.metric("Profit vs approve-all", fmt_money(profit_delta), border=True)
+        kpi_cards([
+            ("Approval rate", f"{appr_rate:.1%}", f"{int(approved.sum()):,} applicants", BLUE),
+            ("Bad rate approved", f"{bad_rate_appr:.2%}",
+             f"<b>{(bad_rate_appr - PORTFOLIO_RATE) * 100:+.2f} pp</b> vs portfolio", TEAL),
+            ("Bads declined", f"{bads_declined:.1%}", "of all TARGET = 1", ORANGE),
+            ("Profit vs all", fmt_money(profit_delta), "vs approving everyone",
+             TEAL if profit_delta >= 0 else RED),
+        ])
 
         diff_pp = (bad_rate_appr - score_only_bad) * 100
         if rules:
@@ -1104,7 +1311,7 @@ with policy_tab:
         )
 
     # ---- swap-set
-    st.subheader("Swap-set analysis: benchmark vs challenger")
+    section("Champion vs challenger", "Swap-set analysis")
     st.caption(
         "At the same approval rate, which applicants does switching from the logistic benchmark "
         "to LightGBM newly approve (swap-in) or newly decline (swap-out)? A good challenger swaps "
@@ -1169,7 +1376,7 @@ with policy_tab:
 
 # ================================================================= APPLICANT
 with applicant_tab:
-    st.subheader("Why did the model score this applicant this way?")
+    section("Explainability", "Why did the model score this applicant this way?")
     st.caption(
         "TreeSHAP decomposes each LightGBM prediction (in log-odds) into the "
         "contribution of every feature. A random sample of 5,000 holdout applicants is available."
@@ -1239,6 +1446,36 @@ with applicant_tab:
         border=True,
     )
 
+    # ---- credit decision (illustrative policy: 80% approval cut-off, 10-point refer band)
+    cutoff_score = pd_to_score(np.quantile(pred["lightgbm_score"], 0.80))
+    if score_value >= cutoff_score:
+        decision, dcolor = "Approve", "#2BB673"
+        why = f"Score {score_value:.0f} is at or above the cut-off of {cutoff_score:.0f}."
+    elif score_value >= cutoff_score - 10:
+        decision, dcolor = "Refer to underwriter", ORANGE
+        why = (f"Score {score_value:.0f} is within 10 points below the cut-off of "
+               f"{cutoff_score:.0f}: manual review.")
+    else:
+        decision, dcolor = "Decline", RED
+        why = f"Score {score_value:.0f} is below the cut-off of {cutoff_score:.0f}."
+    top_reasons = contrib[contrib > 0].sort_values(ascending=False).head(4)
+    reasons_html = "".join(
+        f"<li>{ADVERSE_REASONS.get(f, label(f))} "
+        f"<span style='color:{MUTED}'>({label(f)} = {fmt_value(f, applicant[f])})</span></li>"
+        for f in top_reasons.index
+    )
+    reasons_block = (
+        f"<div class='lbl' style='margin-top:12px'>"
+        f"{'Principal reasons' if decision != 'Approve' else 'Main risk factors to note'}</div>"
+        f"<ol>{reasons_html}</ol>" if reasons_html else ""
+    )
+    st.markdown(
+        f'<div class="decision" style="--dc:{dcolor}"><div class="top">'
+        f'<span class="lbl">Credit decision</span><span class="val">{decision}</span>'
+        f'<span class="why">{why}</span></div>{reasons_block}</div>',
+        unsafe_allow_html=True,
+    )
+
     left, right = st.columns([3, 2])
     with left:
         order = contrib.abs().sort_values(ascending=False)
@@ -1295,7 +1532,7 @@ with applicant_tab:
         st.caption(f"Holdout risk decile: {decile} of 10.")
 
     # ---- what-if simulator
-    st.subheader("What-if simulator")
+    section("Sensitivity", "What-if simulator")
     st.caption(
         "Change the application and re-score it live with the saved LightGBM model. "
         "Credit-to-income and annuity-to-income are recomputed automatically."
@@ -1382,7 +1619,7 @@ with applicant_tab:
 
 # ================================================================= VALIDATION
 with validation_tab:
-    st.subheader("Validation scorecard")
+    section("Model risk", "Validation scorecard")
     st.caption(
         "Each test is rated Green / Amber / Red against pre-defined thresholds, in the style "
         "of a bank model-risk review. Any Red or unassessed test blocks production approval."
@@ -1427,7 +1664,7 @@ with validation_tab:
             key="download_pdf_report",
         )
 
-    st.subheader("Calibration")
+    section("Accuracy of PDs", "Calibration")
     left, right = st.columns([3, 2])
     with left:
         show(calibration_chart(), "validation_calibration")
@@ -1456,7 +1693,7 @@ with validation_tab:
             "binomial test drives the rating."
         )
 
-    st.subheader("Stability")
+    section("Population drift", "Stability")
     left, right = st.columns([3, 2])
     psi = data["psi"][data["psi"]["model"] == val_model]
     with left:
@@ -1491,7 +1728,7 @@ with validation_tab:
             "the same code would be run monthly on new applications in production."
         )
 
-    st.subheader("Data quality")
+    section("Inputs", "Data quality")
     st.dataframe(
         data["dq"].assign(passed=lambda d: d["passed"].map({True: "✅ Pass", False: "❌ Fail"})),
         hide_index=True, width="stretch",
@@ -1501,7 +1738,7 @@ with validation_tab:
         },
     )
 
-    st.subheader("What drives LightGBM?")
+    section("Explainability", "What drives LightGBM?")
     left, right = st.columns(2)
     shap_global = data["shap_global"].head(15).iloc[::-1]
     with left:
@@ -1524,7 +1761,7 @@ with validation_tab:
         "how useful a feature was for splitting during training. Neither establishes causality."
     )
 
-    st.subheader("Bootstrap validation results")
+    section("Evidence", "Bootstrap validation results")
     st.dataframe(
         data["bootstrap"], hide_index=True, width="stretch",
         column_config={
