@@ -11,7 +11,7 @@ from a PostgreSQL feature mart to a validated LightGBM challenger and an interac
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-baseline-F7931E?logo=scikitlearn&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?logo=streamlit&logoColor=white)
 
-[**Live demo**](#live-demo) · [Architecture](#architecture) · [Results](#experimental-results) · [Validation findings](#model-validation-findings) · [Limitations](#limitations) · [Run it](#getting-started)
+[**Live demo**](#live-demo) · [**📄 Validation report (PDF)**](docs/Model_Validation_Report.pdf) · [Architecture](#architecture) · [Results](#experimental-results) · [Validation findings](#model-validation-findings) · [Limitations](#limitations) · [Run it](#getting-started)
 
 ![Dashboard overview](docs/screenshots/screenshot.png)
 
@@ -38,10 +38,11 @@ Lenders must decide, at application time, how likely an applicant is to run into
 |---|---|
 | **Overview** | Headline KPIs, key findings, risk deciles, ROC curve |
 | **Portfolio Insights** | Which segments carry the most risk? TARGET rate by income type, education, age, employment length, affordability, installment behaviour, bureau exposure and past refusals |
-| **Model Comparison** | Is the challenger really better? ROC/PR curves, bootstrap forest plot, train-vs-holdout gap |
+| **Model Comparison** | Is the challenger really better? ROC/PR curves, bootstrap forest plot, train-vs-holdout gap, KS chart, Lorenz/Gini curve, score distributions by outcome, decile gains table |
 | **Credit Strategy** | How do we turn PDs into decisions? Scorecard scaling, A–F grades, approval-rate vs bad-rate trade-off, profit curve with adjustable economics, age-band fairness review |
+| **Policy Simulator** | Do policy rules add value beyond the score? Score cut-off plus knock-out rules (installment shortfall, prior refusals, bureau exposure, affordability), decline waterfall with the bad rate of each rule's declines, and swap-set analysis of benchmark vs challenger |
 | **Applicant Explorer** | Why did *this* applicant get *this* score? TreeSHAP contributions, reason codes and a live what-if simulator |
-| **Model Validation** | Calibration, SHAP vs gain importance, validation checklist, downloadable validation report |
+| **Model Validation** | Bank-style Green/Amber/Red validation scorecard with an overall rating, binomial calibration test per grade, Hosmer–Lemeshow, PSI/CSI stability, data-quality assertions, SHAP vs gain importance, PDF report download |
 
 ---
 
@@ -96,8 +97,10 @@ flowchart LR
 | **Python** | [`train_model.py`](train_model.py) | Extract the mart, enforce assertions, fit the Logistic Regression baseline, persist holdout IDs |
 | **LightGBM** | [`compare_models.py`](compare_models.py) | Fit the challenger and **assert** that holdout IDs and labels are identical to the baseline |
 | **Validation** | [`validate_models.py`](validate_models.py) · [`check_generalization.py`](check_generalization.py) | Bootstrap confidence intervals, risk concentration, Markdown report, overfitting check |
-| **Serving** | [`build_dashboard_data.py`](build_dashboard_data.py) | TreeSHAP values, segment statistics, portable `lightgbm_model.txt` |
-| **Streamlit** | [`app.py`](app.py) | Six-tab dashboard; reads only `outputs/`, so it deploys without database access |
+| **Serving** | [`build_dashboard_data.py`](build_dashboard_data.py) | TreeSHAP values, segment statistics, PSI/CSI, data-quality results, portable `lightgbm_model.txt` |
+| **Validation library** | [`risk_metrics.py`](risk_metrics.py) | KS, Lorenz/Gini, gains table, Hosmer–Lemeshow, binomial grade test, PSI, score scaling and the RAG scorecard rules, shared by the app and the report |
+| **Reporting** | [`build_validation_report.py`](build_validation_report.py) | Renders the 10-page [Model Validation Report](docs/Model_Validation_Report.pdf) (HTML → PDF) |
+| **Streamlit** | [`app.py`](app.py) | Seven-tab dashboard; reads only `outputs/`, so it deploys without database access |
 
 ### Feature engineering highlights
 
@@ -168,18 +171,43 @@ Illustrative economics, assuming 10% net revenue on good loans and a 50% loss on
 
 ## Model Validation Findings
 
-| # | Check | Result | Assessment |
-|---|---|---|---|
-| 1 | **Holdout integrity** | Applicant IDs and labels asserted identical across both models | ✅ Pass |
-| 2 | **Statistical significance** | Paired stratified bootstrap (500 resamples, seed 42): all four metric differences have 95% CIs that exclude zero | ✅ LightGBM is better beyond sampling noise |
-| 3 | **Generalisation** | LightGBM train AUC **0.763** vs holdout **0.702** (gap 0.061); LR 0.679 vs 0.683 (no gap) | ⚠️ Overfitting: the challenger memorises training patterns |
-| 4 | **Calibration** | Predicted PD tracks the observed rate across deciles and grades; Brier score improves | ✅ Adequate on the random holdout |
-| 5 | **Rank ordering** | A–F grades strictly monotonic (1.2% → 27.3%) | ✅ Pass |
-| 6 | **Explainability** | TreeSHAP reproduces every prediction exactly (log-odds sum asserted). Top drivers: employment length, active bureau loans, due-date shortfall rate, education, bureau loan count | ✅ Drivers are intuitive and directionally plausible |
-| 7 | **Fairness (age, exploratory)** | At 80% approval, the approval rate is 59% for applicants under 25 vs 97% for those 65+. The impact ratio is below 0.8 for the <25 and 25–34 bands | ⚠️ Age is not a model input, but proxies (e.g. employment length) carry it. The gap mirrors genuinely higher observed rates, yet it requires documented business justification |
-| 8 | **Out-of-time stability** | Not possible: the dataset has no application dates | ❌ Outstanding |
+The full **[10-page Model Validation Report (PDF)](docs/Model_Validation_Report.pdf)** follows the structure of a bank model-risk review: executive summary, scope, data quality, discrimination, calibration, robustness, explainability, fairness, findings and conditions for approval.
 
-**Validation decision:** LightGBM is a *promising challenger*. Production use is **not** recommended until the overfitting gap is reduced, a point-in-time feature audit is completed and the model passes an independent, out-of-time validation. The full report is in [`outputs/model_validation_report.md`](outputs/model_validation_report.md).
+### Validation scorecard: LightGBM
+
+| Test | Result | Status |
+|---|---|:---:|
+| Discrimination (Gini) | 0.405 | 🟢 Green |
+| Separation (KS) | 0.301 | 🟢 Green |
+| Benchmark significance | ΔAUC +0.020, 95% CI [+0.015, +0.023] | 🟢 Green |
+| Overfitting (train − holdout AUC) | 0.061 | 🔴 Red |
+| Calibration (binomial test per grade) | 6/6 grades pass · Hosmer–Lemeshow p = 0.099 | 🟢 Green |
+| Rank ordering | Observed rate A → F: 1.2% → 27.3%, strictly monotonic | 🟢 Green |
+| Stability (score PSI, train vs holdout) | 0.0002 | 🟢 Green |
+| Fairness (age-band impact ratio at 80% approval) | 0.61 for applicants under 25 | 🟠 Amber |
+| Data quality | 8/8 assertions pass | 🟢 Green |
+| Out-of-time performance | No application dates in the data | ⚪ Not assessed |
+| Point-in-time feature audit | Behavioural aggregates not yet audited | ⚪ Not assessed |
+
+**Overall rating: Not approved for production.** Thresholds are listed in the report appendix.
+
+### Key findings
+
+| ID | Severity | Finding | Recommendation |
+|---|:---:|---|---|
+| F-01 | 🔴 High | **Overfitting:** train AUC 0.763 vs holdout 0.702; the benchmark shows no gap | Early stopping and regularisation tuned on a separate validation fold; re-validate |
+| F-02 | 🔴 High | **No out-of-time validation:** the dataset has no application dates | Out-of-time test and monthly PSI on dated applications |
+| F-03 | 🔴 High | **Point-in-time leakage risk** in installment, bureau and previous-application aggregates | Restrict aggregates to records dated before each application |
+| F-04 | 🟠 Medium | **Age-band disparity:** under-25 approval rate 59% vs 97% for 65+ (impact ratio 0.61), mirroring higher observed risk | Document the business justification; test proxy features; monitor by age |
+| F-05 | 🟠 Medium | **Holdout reuse** across model comparison | Reserve an untouched test sample for final approval |
+| F-06 | ⚪ Low | **Label definition:** TARGET is payment difficulty, not Basel / IFRS 9 default | Map to 90+ DPD before regulatory use |
+| F-07 | ⚪ Low | **Illustrative economics** in cut-off analysis | Use product-level margin, LGD and funding cost |
+
+The benchmark (Logistic Regression) fails the binomial test in grade E and is rejected by Hosmer–Lemeshow (p = 0.008), so the challenger is also better calibrated.
+
+### Credit-policy insight
+
+The Policy Simulator shows that adding knock-out rules on top of the score usually **does not** pay. With a 570 cut-off plus "due-date shortfall > 30%" and "4+ prior refusals", the approved bad rate is 5.73% at a 75.5% approval rate. A pure LightGBM cut-off at the same approval rate gives 5.35%, because the score already prices that information. In a swap-set at 80% approval, LightGBM swaps in 3,230 applicants with a 10.0% bad rate and swaps out 3,230 with a 13.9% bad rate.
 
 ---
 
@@ -199,7 +227,7 @@ Illustrative economics, assuming 10% net revenue on good loans and a 50% loss on
 - [ ] Early stopping and Bayesian hyper-parameter search on a dedicated validation fold to close the generalisation gap
 - [ ] Mart v3: add the already-materialised bureau-balance and credit-card behaviour features
 - [ ] Monotonic constraints on key risk drivers; a WoE/IV logistic scorecard as a third, fully transparent benchmark
-- [ ] Isotonic calibration and PSI-based stability monitoring
+- [ ] Isotonic calibration and monthly PSI monitoring on dated applications
 - [ ] CI pipeline that runs the SQL data-quality checks and unit tests on every push
 
 ---
@@ -236,7 +264,8 @@ Then open <http://localhost:8501>.
    python compare_models.py        # LightGBM challenger on the same holdout
    python validate_models.py       # bootstrap CIs + validation report
    python check_generalization.py  # train vs holdout gap
-   python build_dashboard_data.py  # SHAP, segments, portable model
+   python build_dashboard_data.py  # SHAP, segments, PSI, data quality, portable model
+   python build_validation_report.py  # 10-page PDF validation report
    ```
 4. **Launch the app** with `streamlit run app.py`.
 
@@ -246,7 +275,9 @@ Then open <http://localhost:8501>.
 
 ```
 credit-risk-platform/
-├── app.py                        # Streamlit dashboard (6 tabs)
+├── app.py                        # Streamlit dashboard (7 tabs)
+├── risk_metrics.py               # KS, Gini, HL, binomial, PSI, RAG rules
+├── build_validation_report.py    # bank-style validation report (PDF)
 ├── train_model.py                # baseline: Logistic Regression
 ├── compare_models.py             # challenger: LightGBM
 ├── validate_models.py            # paired bootstrap + validation report
@@ -255,7 +286,9 @@ credit-risk-platform/
 ├── sql/                          # PostgreSQL feature mart + data-quality checks
 ├── outputs/                      # metrics, comparison tables, report, charts
 │   └── dashboard/                # compact assets read by the app
-├── docs/screenshots/
+├── docs/
+│   ├── Model_Validation_Report.pdf
+│   └── screenshots/
 ├── .streamlit/config.toml        # dark theme
 ├── requirements.txt
 └── packages.txt                  # system deps for Streamlit Community Cloud

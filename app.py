@@ -9,6 +9,12 @@ import streamlit as st
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import precision_recall_curve, roc_curve
 
+import risk_metrics as rm
+from risk_metrics import (
+    BASE_ODDS, BASE_SCORE, GRADES, PDO, RAG_COLORS, RAG_THRESHOLDS,
+    grade_range, pd_to_score, score_to_grade,
+)
+
 st.set_page_config(
     page_title="Credit Risk Intelligence",
     page_icon="🏦",
@@ -31,6 +37,9 @@ FILES = [
     DASH / "shap_global.csv",
     DASH / "segment_risk.csv",
     DASH / "lightgbm_model.txt",
+    DASH / "stability_score_psi.csv",
+    DASH / "stability_feature_csi.csv",
+    DASH / "data_quality.csv",
 ]
 missing = [str(p.relative_to(ROOT)) for p in FILES if not p.exists()]
 if missing:
@@ -58,12 +67,6 @@ MODELS = {
     "Logistic Regression": ("logistic_score", BLUE),
 }
 
-# Score scaling: 600 points at good:bad odds of 20:1, 20 points to double the odds
-PDO, BASE_SCORE, BASE_ODDS = 20, 600, 20
-FACTOR = PDO / np.log(2)
-GRADES = [  # (grade, lower bound inclusive)
-    ("A", 630), ("B", 610), ("C", 590), ("D", 570), ("E", 550), ("F", -np.inf),
-]
 GRADE_COLORS = {
     "A": "#2BB673", "B": TEAL, "C": BLUE, "D": ORANGE, "E": "#FF8A5B", "F": RED,
 }
@@ -118,6 +121,9 @@ def load_data():
         "shap_sample": pd.read_parquet(DASH / "shap_sample.parquet"),
         "shap_global": pd.read_csv(DASH / "shap_global.csv"),
         "segments": pd.read_csv(DASH / "segment_risk.csv"),
+        "psi": pd.read_csv(DASH / "stability_score_psi.csv"),
+        "csi": pd.read_csv(DASH / "stability_feature_csi.csv"),
+        "dq": pd.read_csv(DASH / "data_quality.csv"),
     }
 
 
@@ -132,33 +138,6 @@ pred = data["pred"]
 booster = load_booster()
 FEATURES = booster.feature_name()
 PORTFOLIO_RATE = pred["target"].mean()
-
-
-def pd_to_score(p):
-    p = np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
-    score = BASE_SCORE + FACTOR * np.log(((1 - p) / p) / BASE_ODDS)
-    return float(score) if score.ndim == 0 else score
-
-
-def score_to_grade(score):
-    score = np.atleast_1d(score)
-    out = np.full(score.shape, "F", dtype=object)
-    for grade, lower in reversed(GRADES):
-        out[score >= lower] = grade
-    return out
-
-
-def grade_range(grade):
-    bounds = dict(GRADES)
-    names = [g for g, _ in GRADES]
-    i = names.index(grade)
-    lower = bounds[grade]
-    upper = bounds[names[i - 1]] if i > 0 else None
-    if upper is None:
-        return f"≥ {lower:.0f}"
-    if np.isinf(lower):
-        return f"< {upper:.0f}"
-    return f"{lower:.0f} – {upper - 1:.0f}"
 
 
 # ---------------------------------------------------------------- styling
@@ -198,6 +177,27 @@ st.markdown(f"""
 }}
 .reason b {{ color: {ORANGE}; }}
 .reason.good b {{ color: {TEAL}; }}
+.pill {{
+    display: inline-block; padding: 2px 10px; border-radius: 999px; border: 1px solid;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+}}
+table.rag {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+table.rag th {{
+    text-align: left; color: {MUTED}; font-weight: 600; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .6px; padding: 8px 10px; border-bottom: 1px solid {BORDER};
+}}
+table.rag td {{ padding: 9px 10px; border-bottom: 1px solid {BORDER}; vertical-align: top; }}
+table.rag td.t {{ font-weight: 600; white-space: nowrap; }}
+table.rag td.r {{ font-variant-numeric: tabular-nums; }}
+table.rag td.n {{ color: {MUTED}; font-size: 13px; }}
+.rating {{
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 14px;
+}}
+.rating .big {{ font-size: 22px; font-weight: 800; }}
+.rating .meta {{ color: {MUTED}; font-size: 13px; }}
+.rag-wrap {{ overflow-x: auto; }}
 @media (max-width: 640px) {{ .hero-title {{ font-size: 30px; }} }}
 </style>
 """, unsafe_allow_html=True)
@@ -226,7 +226,10 @@ def chart_style(fig, height=360):
 
 
 def show(fig, key):
-    st.plotly_chart(fig, width="stretch", theme=None, key=key)
+    st.plotly_chart(
+        fig, width="stretch", theme=None, key=key,
+        config={"displayModeBar": False, "displaylogo": False},
+    )
 
 
 # ---------------------------------------------------------------- analytics
@@ -385,6 +388,99 @@ def gap_chart(gap):
     return chart_style(fig, 320)
 
 
+def ks_chart(column, color):
+    curve, ks, at_pop, _ = rm.ks_curve(pred["target"], pred[column])
+    k = curve.iloc[(curve["population"] - at_pop).abs().argmin()]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=curve["population"] * 100, y=curve["cum_bad"] * 100, name="Cumulative bads",
+        line=dict(color=RED, width=3),
+    ))
+    fig.add_trace(go.Scatter(
+        x=curve["population"] * 100, y=curve["cum_good"] * 100, name="Cumulative goods",
+        line=dict(color=color, width=3),
+    ))
+    fig.add_trace(go.Scatter(
+        x=[k["population"] * 100] * 2, y=[k["cum_good"] * 100, k["cum_bad"] * 100],
+        mode="lines+markers", line=dict(color=ORANGE, width=2, dash="dot"),
+        marker=dict(size=7, color=ORANGE), name=f"KS = {ks:.3f}",
+    ))
+    fig.add_annotation(
+        x=k["population"] * 100, y=(k["cum_bad"] + k["cum_good"]) * 50,
+        text=f"KS {ks:.3f}<br>at {at_pop:.0%} of applicants", showarrow=False,
+        xanchor="left", xshift=8, font=dict(color=ORANGE),
+    )
+    fig.update_layout(
+        xaxis_title="Applicants ranked riskiest → safest (%)", yaxis_title="Cumulative share (%)",
+    )
+    return chart_style(fig, 380)
+
+
+def lorenz_chart():
+    fig = go.Figure()
+    bad_rate = PORTFOLIO_RATE
+    fig.add_trace(go.Scatter(
+        x=[0, bad_rate * 100, 100], y=[0, 100, 100], name="Perfect model",
+        line=dict(color=MUTED, dash="dot", width=1.5),
+    ))
+    for name, (column, color) in reversed(MODELS.items()):
+        curve, gini = rm.lorenz_curve(pred["target"], pred[column])
+        fig.add_trace(go.Scatter(
+            x=curve["population"] * 100, y=curve["cum_bad"] * 100,
+            name=f"{name} · Gini {gini:.3f}", line=dict(color=color, width=3),
+        ))
+    fig.add_trace(go.Scatter(
+        x=[0, 100], y=[0, 100], name="Random", line=dict(color=MUTED, dash="dash"),
+    ))
+    fig.update_layout(
+        xaxis_title="Applicants declined, riskiest first (%)", yaxis_title="Bads captured (%)",
+    )
+    return chart_style(fig, 380)
+
+
+def score_distribution_chart(column, color):
+    scores = pd_to_score(pred[column])
+    fig = go.Figure()
+    for outcome, name, c in [(0, "No difficulty (good)", color), (1, "Payment difficulty (bad)", RED)]:
+        fig.add_trace(go.Histogram(
+            x=scores[pred["target"].to_numpy() == outcome], name=name,
+            histnorm="percent", xbins=dict(start=480, end=680, size=5),
+            marker_color=c, opacity=0.6,
+        ))
+    for grade, lower in GRADES[:-1]:
+        fig.add_vline(x=lower, line_color=BORDER, line_dash="dot",
+                      annotation_text=grade, annotation_position="top right",
+                      annotation_font_color=MUTED)
+    fig.update_layout(barmode="overlay", xaxis_title="Credit score", yaxis_title="Share of group (%)")
+    return chart_style(fig, 380)
+
+
+def rag_pill(status):
+    return (
+        f'<span class="pill" style="background:{RAG_COLORS[status]}22;'
+        f'color:{RAG_COLORS[status]};border-color:{RAG_COLORS[status]}66">{status}</span>'
+    )
+
+
+def rag_table_html(table):
+    rows = "".join(
+        f"<tr><td class='t'>{r.test}</td><td class='r'>{r.result}</td>"
+        f"<td>{rag_pill(r.status)}</td><td class='n'>{r.note}</td></tr>"
+        for r in table.itertuples()
+    )
+    return (
+        "<table class='rag'><thead><tr><th>Test</th><th>Result</th><th>Status</th>"
+        f"<th>Basis</th></tr></thead><tbody>{rows}</tbody></table>"
+    )
+
+
+@st.cache_data
+def scorecard(model):
+    return rm.validation_scorecard(
+        pred, data["bootstrap"], data["gap"], data["psi"], data["dq"], model
+    )
+
+
 # ---------------------------------------------------------------- header
 best = data["bootstrap"].set_index("Metric")
 st.markdown(f"""
@@ -405,12 +501,13 @@ from a PostgreSQL feature mart to a validated challenger model and an approval s
 """, unsafe_allow_html=True)
 
 (
-    overview, insights_tab, models_tab, strategy_tab, applicant_tab, validation_tab
+    overview, insights_tab, models_tab, strategy_tab, policy_tab, applicant_tab, validation_tab
 ) = st.tabs([
     "Overview",
     "Portfolio Insights",
     "Model Comparison",
     "Credit Strategy",
+    "Policy Simulator",
     "Applicant Explorer",
     "Model Validation",
 ])
@@ -611,6 +708,53 @@ with models_tab:
             "It still wins on holdout, but the gap argues for early stopping, "
             "lower tree complexity and an out-of-time test before any deployment."
         )
+
+    st.subheader("Credit-risk diagnostics")
+    st.caption(
+        "The standard views a credit-risk or model-validation team reviews before "
+        "accepting a scorecard: separation (KS), concentration (Lorenz / Gini), score "
+        "distributions and the decile gains table."
+    )
+    diag_model = st.segmented_control(
+        "Model", list(MODELS), default="LightGBM", key="diag_model"
+    ) or "LightGBM"
+    diag_col, diag_color = MODELS[diag_model]
+    left, right = st.columns(2)
+    with left:
+        st.markdown(f"**Kolmogorov–Smirnov: {diag_model}**")
+        show(ks_chart(diag_col, diag_color), "ks_chart")
+    with right:
+        st.markdown("**Lorenz curve: share of bads captured**")
+        show(lorenz_chart(), "lorenz_chart")
+    left, right = st.columns(2)
+    with left:
+        st.markdown(f"**Score distribution by outcome: {diag_model}**")
+        show(score_distribution_chart(diag_col, diag_color), "score_dist")
+    with right:
+        st.markdown(f"**Gains table: {diag_model}** (decile 1 = riskiest 10%)")
+        gains = rm.gains_table(pred["target"], pred[diag_col])
+        gains["score_range"] = [
+            f"{pd_to_score(hi):.0f} – {pd_to_score(lo):.0f}"
+            for lo, hi in zip(gains["min_pd"], gains["max_pd"])
+        ]
+        st.dataframe(
+            gains[["decile", "score_range", "applicants", "bads", "bad_rate",
+                   "cum_bads_captured", "lift", "cum_lift"]],
+            hide_index=True, width="stretch", height=388,
+            column_config={
+                "decile": "Decile",
+                "score_range": "Score",
+                "applicants": st.column_config.NumberColumn("Applicants", format="%d"),
+                "bads": st.column_config.NumberColumn("Bads", format="%d"),
+                "bad_rate": st.column_config.NumberColumn("Bad rate", format="percent"),
+                "cum_bads_captured": st.column_config.ProgressColumn(
+                    "Cum. bads captured", format="percent", min_value=0, max_value=1
+                ),
+                "lift": st.column_config.NumberColumn("Lift", format="%.2fx"),
+                "cum_lift": st.column_config.NumberColumn("Cum. lift", format="%.2fx"),
+            },
+        )
+
 
 # ================================================================= STRATEGY
 with strategy_tab:
@@ -824,6 +968,204 @@ with strategy_tab:
             )
         else:
             st.success("All age bands keep an impact ratio of at least 0.8 at this cut-off.")
+
+# ================================================================= POLICY
+with policy_tab:
+    st.subheader("Policy simulator")
+    st.caption(
+        "Combine a score cut-off with knock-out rules, as a credit-policy team would, and see "
+        "the effect on approval rate, bad rate and profit. Rules apply in order; each row of "
+        "the waterfall shows only the applicants that rule declines on top of the earlier ones."
+    )
+
+    controls, results = st.columns([1, 2.2], gap="large")
+    with controls:
+        pol_model = st.segmented_control(
+            "Scoring model", list(MODELS), default="LightGBM", key="pol_model"
+        ) or "LightGBM"
+        pol_col = MODELS[pol_model][0]
+        pol_scores = pd_to_score(pred[pol_col])
+        min_score = st.slider("Minimum credit score", 520, 640, 570, 1, key="pol_score")
+
+        st.markdown("**Knock-out rules**")
+        rule_specs = [
+            ("shortfall", "Due-date shortfall rate above", "due_date_shortfall_rate",
+             0.0, 1.0, 0.30, 0.05, ">", True, "%.2f"),
+            ("refused", "Previous refusals at least", "refused_count",
+             1, 15, 4, 1, ">=", True, "%d"),
+            ("active", "Active bureau loans at least", "active_loan_count",
+             1, 15, 6, 1, ">=", False, "%d"),
+            ("cti", "Credit-to-income above", "credit_to_income",
+             1.0, 20.0, 10.0, 0.5, ">", False, "%.1f"),
+            ("ati", "Annuity-to-income above", "annuity_to_income",
+             0.05, 1.0, 0.40, 0.05, ">", False, "%.2f"),
+        ]
+        rules = []
+        for key, text, column, lo, hi, default, step, op, on, fmt in rule_specs:
+            enabled = st.checkbox(f"Decline if {text.lower()}", value=on, key=f"rule_{key}")
+            threshold = st.slider(
+                text, lo, hi, default, step, format=fmt, key=f"thr_{key}",
+                disabled=not enabled, label_visibility="collapsed",
+            )
+            if enabled:
+                values = pred[column].to_numpy(dtype=float)
+                hit = (values > threshold) if op == ">" else (values >= threshold)
+                hit = np.nan_to_num(hit, nan=False).astype(bool)
+                shown = f"{threshold:.2f}" if isinstance(threshold, float) else f"{threshold}"
+                rules.append((f"{text} {shown}", hit))
+        with st.expander("Economics assumptions"):
+            pol_margin = st.slider("Net revenue on a good loan (%)", 1, 30, 10, key="pol_margin") / 100
+            pol_lgd = st.slider("Loss on a problem loan (%)", 10, 100, 50, key="pol_lgd") / 100
+        st.caption("Age-based rules are deliberately not offered: age is a protected attribute.")
+
+    y_all = pred["target"].to_numpy()
+    credit = pred["credit_amount"].to_numpy(dtype=float)
+    n_all = len(y_all)
+
+    def pnl(mask):
+        return float(np.where(y_all[mask] == 1, -pol_lgd, pol_margin) @ credit[mask])
+
+    approved = np.ones(n_all, dtype=bool)
+    steps = [("Score below " + str(min_score), pol_scores < min_score)] + rules
+    waterfall = []
+    for name, hit in steps:
+        declined_now = approved & hit
+        waterfall.append({
+            "rule": name,
+            "declined": int(declined_now.sum()),
+            "bad_rate_declined": y_all[declined_now].mean() if declined_now.any() else np.nan,
+        })
+        approved &= ~hit
+    waterfall = pd.DataFrame(waterfall)
+
+    appr_rate = approved.mean()
+    bad_rate_appr = y_all[approved].mean() if approved.any() else np.nan
+    bads_declined = 1 - y_all[approved].sum() / y_all.sum()
+    profit_delta = pnl(approved) - pnl(np.ones(n_all, dtype=bool))
+
+    # Benchmark: score-only policy at the same approval rate
+    k = max(int(round(appr_rate * n_all)), 1)
+    score_only = np.zeros(n_all, dtype=bool)
+    score_only[np.argsort(pred[pol_col].to_numpy(), kind="stable")[:k]] = True
+    score_only_bad = y_all[score_only].mean()
+
+    with results:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Approval rate", f"{appr_rate:.1%}", border=True)
+        k2.metric(
+            "Bad rate of approved", f"{bad_rate_appr:.2%}",
+            delta=f"{(bad_rate_appr - PORTFOLIO_RATE) * 100:+.2f} pp vs portfolio",
+            delta_color="inverse", border=True,
+        )
+        k3.metric("Problem loans declined", f"{bads_declined:.1%}", border=True)
+        k4.metric("Profit vs approve-all", fmt_money(profit_delta), border=True)
+
+        diff_pp = (bad_rate_appr - score_only_bad) * 100
+        if rules:
+            if diff_pp > 0.02:
+                verdict = (
+                    f"The knock-out rules <b>cost</b> accuracy: a pure score cut-off approving the "
+                    f"same {appr_rate:.0%} would reach a bad rate of <b>{score_only_bad:.2%}</b> "
+                    f"({diff_pp:+.2f} pp). The score already prices this information in."
+                )
+            elif diff_pp < -0.02:
+                verdict = (
+                    f"The knock-out rules <b>add</b> value beyond the score: a pure cut-off at the same "
+                    f"{appr_rate:.0%} approval gives <b>{score_only_bad:.2%}</b> ({diff_pp:+.2f} pp)."
+                )
+            else:
+                verdict = (
+                    f"The rules are <b>neutral</b>: a pure score cut-off at {appr_rate:.0%} approval gives "
+                    f"a similar bad rate ({score_only_bad:.2%})."
+                )
+            insight("Do the rules beat the score alone?", verdict)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=waterfall["rule"][::-1], x=waterfall["declined"][::-1], orientation="h",
+            marker_color=[ORANGE] * (len(waterfall) - 1) + [MODELS[pol_model][1]],
+            text=[
+                f"{d:,} · {b:.1%} bad" if d else "none"
+                for d, b in zip(waterfall["declined"][::-1], waterfall["bad_rate_declined"][::-1])
+            ],
+            textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}<br>%{x:,} applicants declined<extra></extra>",
+        ))
+        fig.update_layout(
+            title=dict(text="Decline waterfall", font=dict(size=14)),
+            xaxis_title="Additional applicants declined",
+        )
+        fig.update_yaxes(automargin=True)
+        chart_style(fig, 120 + 48 * len(waterfall)).update_layout(margin=dict(l=35, r=110, t=45, b=45))
+        show(fig, "policy_waterfall")
+        st.caption(
+            f"Portfolio TARGET rate is {PORTFOLIO_RATE:.2%}. A rule is earning its place when the "
+            "bad rate of the applicants it declines is well above that."
+        )
+
+    # ---- swap-set
+    st.subheader("Swap-set analysis: benchmark vs challenger")
+    st.caption(
+        "At the same approval rate, which applicants does switching from the logistic benchmark "
+        "to LightGBM newly approve (swap-in) or newly decline (swap-out)? A good challenger swaps "
+        "out riskier applicants than it swaps in."
+    )
+    swap_rate = st.slider("Approval rate for both models", 0.50, 0.95, 0.80, 0.01,
+                          format="%.2f", key="swap_rate")
+    k = int(round(swap_rate * n_all))
+    lr_ok = np.zeros(n_all, dtype=bool)
+    gb_ok = np.zeros(n_all, dtype=bool)
+    lr_ok[np.argsort(pred["logistic_score"].to_numpy(), kind="stable")[:k]] = True
+    gb_ok[np.argsort(pred["lightgbm_score"].to_numpy(), kind="stable")[:k]] = True
+    cells = {
+        "Approved by both": lr_ok & gb_ok,
+        "Swap-in (LightGBM only)": ~lr_ok & gb_ok,
+        "Swap-out (benchmark only)": lr_ok & ~gb_ok,
+        "Declined by both": ~lr_ok & ~gb_ok,
+    }
+    swap = pd.DataFrame([
+        {"segment": name, "applicants": int(m.sum()),
+         "share": m.mean(), "bad_rate": y_all[m].mean() if m.any() else np.nan}
+        for name, m in cells.items()
+    ])
+
+    left, right = st.columns([2, 3])
+    with left:
+        # rows: LightGBM approves / declines; columns: benchmark approves / declines
+        z = [[swap.loc[0, "applicants"], swap.loc[1, "applicants"]],
+             [swap.loc[2, "applicants"], swap.loc[3, "applicants"]]]
+        br = [[swap.loc[0, "bad_rate"], swap.loc[1, "bad_rate"]],
+              [swap.loc[2, "bad_rate"], swap.loc[3, "bad_rate"]]]
+        fig = go.Figure(go.Heatmap(
+            z=br, x=["Benchmark approves", "Benchmark declines"],
+            y=["LightGBM approves", "LightGBM declines"],
+            text=[[f"{z[i][j]:,}<br>bad rate {br[i][j]:.1%}" for j in range(2)] for i in range(2)],
+            texttemplate="%{text}", colorscale=[[0, TEAL], [0.5, ORANGE], [1, RED]],
+            showscale=False, hoverinfo="skip",
+        ))
+        fig.update_yaxes(autorange="reversed")
+        show(chart_style(fig, 300), "swap_heatmap")
+    with right:
+        swap_in, swap_out = swap.loc[1], swap.loc[2]
+        insight(
+            "Swap-set verdict",
+            f"Switching to LightGBM at {swap_rate:.0%} approval swaps in "
+            f"<b>{swap_in['applicants']:,}</b> applicants with a bad rate of "
+            f"<b>{swap_in['bad_rate']:.1%}</b> and swaps out <b>{swap_out['applicants']:,}</b> "
+            f"with a bad rate of <b>{swap_out['bad_rate']:.1%}</b>. "
+            + ("The challenger trades riskier applicants for safer ones at the same volume."
+               if swap_out["bad_rate"] > swap_in["bad_rate"]
+               else "The challenger does not improve the approved population at this volume."),
+        )
+        st.dataframe(
+            swap, hide_index=True, width="stretch",
+            column_config={
+                "segment": "Segment",
+                "applicants": st.column_config.NumberColumn("Applicants", format="%d"),
+                "share": st.column_config.NumberColumn("Share", format="percent"),
+                "bad_rate": st.column_config.NumberColumn("Bad rate", format="percent"),
+            },
+        )
 
 # ================================================================= APPLICANT
 with applicant_tab:
@@ -1040,12 +1382,123 @@ with applicant_tab:
 
 # ================================================================= VALIDATION
 with validation_tab:
-    st.subheader("Probability calibration")
-    show(calibration_chart(), "validation_calibration")
+    st.subheader("Validation scorecard")
     st.caption(
-        "Both models track observed rates closely in the bulk of the distribution; "
-        "Brier score improves from "
-        f"{logistic['brier_score']:.4f} to {lightgbm['brier_score']:.4f}."
+        "Each test is rated Green / Amber / Red against pre-defined thresholds, in the style "
+        "of a bank model-risk review. Any Red or unassessed test blocks production approval."
+    )
+    val_model = st.segmented_control(
+        "Model under review", list(MODELS), default="LightGBM", key="val_model"
+    ) or "LightGBM"
+    sc_table, rating = scorecard(val_model)
+    counts = sc_table["status"].value_counts()
+    rating_color = (
+        RAG_COLORS["Red"] if rating.startswith("Not")
+        else RAG_COLORS["Amber"] if "conditions" in rating else RAG_COLORS["Green"]
+    )
+    tally = " · ".join(
+        f"{counts.get(s, 0)} {s}" for s in ["Green", "Amber", "Red", "Not assessed"]
+    )
+    st.markdown(
+        f'<div class="rating"><div><div class="meta">Overall rating · {val_model}</div>'
+        f'<div class="big" style="color:{rating_color}">{rating}</div></div>'
+        f'<div class="meta">{tally}</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<div class="rag-wrap">{rag_table_html(sc_table)}</div>', unsafe_allow_html=True)
+    with st.expander("RAG thresholds"):
+        st.dataframe(
+            pd.DataFrame(RAG_THRESHOLDS, columns=["Test", "Thresholds"]),
+            hide_index=True, width="stretch",
+        )
+        st.caption(
+            "Thresholds are illustrative, in line with common practice for retail "
+            "application scorecards; a real model-risk policy sets its own."
+        )
+
+    pdf_report = ROOT / "docs" / "Model_Validation_Report.pdf"
+    if pdf_report.exists():
+        st.download_button(
+            "Download full validation report (PDF)",
+            pdf_report.read_bytes(),
+            file_name="Model_Validation_Report.pdf",
+            mime="application/pdf",
+            type="primary",
+            key="download_pdf_report",
+        )
+
+    st.subheader("Calibration")
+    left, right = st.columns([3, 2])
+    with left:
+        show(calibration_chart(), "validation_calibration")
+    with right:
+        val_col = MODELS[val_model][0]
+        binom = rm.binomial_grade_test(
+            score_to_grade(pd_to_score(pred[val_col])), pred["target"], pred[val_col]
+        )
+        hl_stat, hl_p = rm.hosmer_lemeshow(pred["target"], pred[val_col])
+        st.markdown(f"**Binomial test by grade: {val_model}**")
+        st.dataframe(
+            binom[["grade", "applicants", "observed_rate", "predicted_pd", "p_value", "result"]],
+            hide_index=True, width="stretch",
+            column_config={
+                "grade": "Grade",
+                "applicants": st.column_config.NumberColumn("N", format="%d"),
+                "observed_rate": st.column_config.NumberColumn("Observed", format="percent"),
+                "predicted_pd": st.column_config.NumberColumn("Predicted", format="percent"),
+                "p_value": st.column_config.NumberColumn("p-value", format="%.3f"),
+                "result": "Result",
+            },
+        )
+        st.caption(
+            f"Hosmer–Lemeshow (10 groups): χ² = {hl_stat:.1f}, p = {hl_p:.3f}. "
+            "With 61k applicants HL rejects small deviations easily, so the per-grade "
+            "binomial test drives the rating."
+        )
+
+    st.subheader("Stability")
+    left, right = st.columns([3, 2])
+    psi = data["psi"][data["psi"]["model"] == val_model]
+    with left:
+        st.markdown(f"**Score PSI = {psi['total_psi'].iloc[0]:.4f}** · development vs holdout")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=list(range(1, len(psi) + 1)), y=psi["expected_pct"] * 100,
+            name="Development (train)", marker_color=MUTED,
+        ))
+        fig.add_trace(go.Bar(
+            x=list(range(1, len(psi) + 1)), y=psi["actual_pct"] * 100,
+            name="Holdout", marker_color=MODELS[val_model][1],
+        ))
+        fig.update_layout(
+            barmode="group", xaxis_title="Score bin (development deciles)",
+            yaxis_title="Share of applicants (%)",
+        )
+        fig.update_xaxes(dtick=1)
+        show(chart_style(fig, 340), "psi_chart")
+    with right:
+        st.markdown("**Characteristic stability (CSI), top features**")
+        st.dataframe(
+            data["csi"].head(8).assign(feature=lambda d: d["feature"].map(label)),
+            hide_index=True, width="stretch",
+            column_config={
+                "feature": "Feature",
+                "csi": st.column_config.NumberColumn("CSI", format="%.5f"),
+            },
+        )
+        st.caption(
+            "PSI < 0.10 is stable. A random split makes this near zero by construction; "
+            "the same code would be run monthly on new applications in production."
+        )
+
+    st.subheader("Data quality")
+    st.dataframe(
+        data["dq"].assign(passed=lambda d: d["passed"].map({True: "✅ Pass", False: "❌ Fail"})),
+        hide_index=True, width="stretch",
+        column_config={
+            "check": "Assertion", "expected": "Expected",
+            "observed": "Observed", "passed": "Result",
+        },
     )
 
     st.subheader("What drives LightGBM?")
@@ -1071,21 +1524,6 @@ with validation_tab:
         "how useful a feature was for splitting during training. Neither establishes causality."
     )
 
-    st.subheader("Validation status")
-    status = pd.DataFrame([
-        ("Common holdout, verified identical applicant IDs", "Done"),
-        ("ROC-AUC, PR-AUC, KS, Brier, calibration", "Done"),
-        ("Paired stratified bootstrap confidence intervals", "Done"),
-        ("Train vs holdout generalisation check", "Done — LightGBM gap flagged"),
-        ("Explainability: TreeSHAP global + reason codes", "Done"),
-        ("Fairness review by age band (exploratory)", "Done"),
-        ("Point-in-time / leakage audit of installment features", "Outstanding"),
-        ("Out-of-time validation", "Outstanding — no application dates in data"),
-        ("Hyper-parameter tuning on a separate validation fold", "Outstanding"),
-        ("Independent validation & stability monitoring (PSI)", "Outstanding"),
-    ], columns=["Check", "Status"])
-    st.dataframe(status, hide_index=True, width="stretch")
-
     st.subheader("Bootstrap validation results")
     st.dataframe(
         data["bootstrap"], hide_index=True, width="stretch",
@@ -1108,7 +1546,7 @@ with validation_tab:
         report_text = report_file.read_text(encoding="utf-8")
         with d2:
             st.download_button(
-                "Download validation report (Markdown)",
+                "Download validation summary (Markdown)",
                 data=report_text,
                 file_name="model_validation_report.md",
                 mime="text/markdown",

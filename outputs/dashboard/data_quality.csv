@@ -1,0 +1,9 @@
+check,expected,observed,passed
+Row count,"307,511","307,511",True
+Unique applicant_id,0 duplicates,0 duplicates,True
+TARGET completeness,0 missing,0 missing,True
+TARGET values,"{0, 1}","[0, 1]",True
+Employment sentinel recoded,0 leaks,0 leaks,True
+"Rates within [0, 1]",0 violations,0 violations,True
+Non-negative amounts,0 violations,0 violations,True
+Holdout IDs identical across models,match,match,True

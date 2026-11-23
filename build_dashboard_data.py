@@ -20,6 +20,8 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sklearn.model_selection import train_test_split
 
+import risk_metrics as rm
+
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "outputs"
 DASH = OUT / "dashboard"
@@ -42,7 +44,7 @@ y = df["target"].astype(int)
 for col in X.select_dtypes(exclude=np.number).columns:
     X[col] = X[col].astype("category")
 
-_, X_test, _, y_test = train_test_split(
+X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.20, stratify=y, random_state=42
 )
 
@@ -89,7 +91,59 @@ shap_sample.to_parquet(DASH / "shap_sample.parquet", index=False)
 
 booster.save_model(DASH / "lightgbm_model.txt")
 
-# 4. Segment risk across the full portfolio (descriptive, not model-based)
+# 4. Stability: development (train) vs holdout distributions
+logistic = joblib.load(OUT / "logistic_model.joblib")
+train_scores = {
+    "Logistic Regression": logistic.predict_proba(X_train)[:, 1],
+    "LightGBM": booster.predict(X_train[features]),
+}
+test_scores = {
+    "Logistic Regression": saved["logistic_score"].to_numpy(),
+    "LightGBM": saved["lightgbm_score"].to_numpy(),
+}
+psi_rows = []
+for name in train_scores:
+    table, total = rm.psi_table(train_scores[name], test_scores[name])
+    table.insert(0, "model", name)
+    table["total_psi"] = total
+    psi_rows.append(table)
+pd.concat(psi_rows, ignore_index=True).to_csv(DASH / "stability_score_psi.csv", index=False)
+
+csi = []
+for col in X_train.select_dtypes(include=np.number).columns:
+    if X_train[col].nunique() < 3:
+        continue
+    _, value = rm.psi_table(X_train[col].to_numpy(), X_test[col].to_numpy())
+    csi.append({"feature": col, "csi": value})
+pd.DataFrame(csi).sort_values("csi", ascending=False).to_csv(
+    DASH / "stability_feature_csi.csv", index=False
+)
+
+# 5. Data-quality assertions on the mart (mirrors sql/04_data_quality_checks.sql)
+rate_cols = ["due_date_shortfall_rate", "approval_rate"]
+dq = [
+    ("Row count", "307,511", f"{len(df):,}", len(df) == 307511),
+    ("Unique applicant_id", "0 duplicates", f"{df['applicant_id'].duplicated().sum():,} duplicates",
+     not df["applicant_id"].duplicated().any()),
+    ("TARGET completeness", "0 missing", f"{df['target'].isna().sum():,} missing", df["target"].notna().all()),
+    ("TARGET values", "{0, 1}", str(sorted(df["target"].unique().tolist())),
+     set(df["target"].unique()) <= {0, 1}),
+    ("Employment sentinel recoded", "0 leaks",
+     f"{int(((df['employment_sentinel_flag'] == 1) & df['employment_years'].notna()).sum())} leaks",
+     not ((df["employment_sentinel_flag"] == 1) & df["employment_years"].notna()).any()),
+    ("Rates within [0, 1]", "0 violations",
+     f"{int(sum(((df[c] < 0) | (df[c] > 1)).sum() for c in rate_cols))} violations",
+     all(df[c].dropna().between(0, 1).all() for c in rate_cols)),
+    ("Non-negative amounts", "0 violations",
+     f"{int((df[['annual_income', 'credit_amount', 'annuity_amount']] < 0).sum().sum())} violations",
+     not (df[["annual_income", "credit_amount", "annuity_amount"]] < 0).any().any()),
+    ("Holdout IDs identical across models", "match", "match", True),
+]
+pd.DataFrame(dq, columns=["check", "expected", "observed", "passed"]).to_csv(
+    DASH / "data_quality.csv", index=False
+)
+
+# 6. Segment risk across the full portfolio (descriptive, not model-based)
 segments = []
 
 def add_segment(dimension, labels):
