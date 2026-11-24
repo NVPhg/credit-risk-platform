@@ -61,18 +61,35 @@ holdout.insert(1, "target", y_test.to_numpy())
 holdout["age_years"] = df.loc[X_test.index, "age_years"].to_numpy()
 holdout["logistic_score"] = saved["logistic_score"].to_numpy()
 holdout["lightgbm_score"] = saved["lightgbm_score"].to_numpy()
+for extra in ["lightgbm_v11_score", "scorecard_score", "scorecard_points"]:
+    if extra in saved.columns:
+        holdout[extra] = saved[extra].to_numpy()
 holdout.reset_index(drop=True).to_parquet(DASH / "holdout_scored.parquet", index=False)
 
-# 3. SHAP contributions (LightGBM TreeSHAP via pred_contrib)
+# 3. SHAP contributions (TreeSHAP via pred_contrib) for the current challenger:
+#    LightGBM v1.1 when tune_challenger.py has been run, otherwise v1.0.
 model = joblib.load(OUT / "lightgbm_model.joblib")
-booster = model.booster_
+booster_v10 = model.booster_
+booster_v10.save_model(DASH / "lightgbm_model.txt")
+v11_path = DASH / "lightgbm_v11_model.txt"
+if v11_path.exists() and "lightgbm_v11_score" in saved.columns:
+    import lightgbm as lgb
+    booster = lgb.Booster(model_file=str(v11_path))
+    challenger_col = "lightgbm_v11_score"
+else:
+    booster = booster_v10
+    challenger_col = "lightgbm_score"
 features = booster.feature_name()
 
 contrib = booster.predict(X_test[features], pred_contrib=True)
 # contrib columns: one per feature + expected value (log-odds space)
 shap_values = contrib[:, :-1]
 recomputed = 1 / (1 + np.exp(-contrib.sum(axis=1)))
-assert np.allclose(recomputed, saved["lightgbm_score"].to_numpy(), atol=1e-6)
+assert np.allclose(recomputed, saved[challenger_col].to_numpy(), atol=1e-6)
+pd.DataFrame({
+    "feature": features,
+    "importance": booster.feature_importance(importance_type="gain"),
+}).sort_values("importance", ascending=False).to_csv(DASH / "feature_importance_challenger.csv", index=False)
 
 pd.DataFrame({
     "feature": features,
@@ -89,18 +106,28 @@ shap_sample.insert(0, "applicant_id", test_ids[sample_idx])
 shap_sample["base_value"] = contrib[sample_idx, -1]
 shap_sample.to_parquet(DASH / "shap_sample.parquet", index=False)
 
-booster.save_model(DASH / "lightgbm_model.txt")
 
 # 4. Stability: development (train) vs holdout distributions
 logistic = joblib.load(OUT / "logistic_model.joblib")
 train_scores = {
     "Logistic Regression": logistic.predict_proba(X_train)[:, 1],
-    "LightGBM": booster.predict(X_train[features]),
+    "LightGBM v1.0": booster_v10.predict(X_train[features]),
 }
 test_scores = {
     "Logistic Regression": saved["logistic_score"].to_numpy(),
-    "LightGBM": saved["lightgbm_score"].to_numpy(),
+    "LightGBM v1.0": saved["lightgbm_score"].to_numpy(),
 }
+if challenger_col == "lightgbm_v11_score":
+    train_scores["LightGBM v1.1"] = booster.predict(X_train[features])
+    test_scores["LightGBM v1.1"] = saved["lightgbm_v11_score"].to_numpy()
+sc_path = OUT / "scorecard" / "scorecard.joblib"
+if sc_path.exists() and "scorecard_score" in saved.columns:
+    sc_model = joblib.load(sc_path)
+    X_train_sc = X_train.copy()
+    for col in X_train_sc.select_dtypes(include="category").columns:
+        X_train_sc[col] = X_train_sc[col].astype(str)
+    train_scores["WoE Scorecard"] = sc_model.predict_proba(X_train_sc)[:, 1]
+    test_scores["WoE Scorecard"] = saved["scorecard_score"].to_numpy()
 psi_rows = []
 for name in train_scores:
     table, total = rm.psi_table(train_scores[name], test_scores[name])

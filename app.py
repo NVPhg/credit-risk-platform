@@ -37,7 +37,15 @@ FILES = [
     DASH / "shap_sample.parquet",
     DASH / "shap_global.csv",
     DASH / "segment_risk.csv",
-    DASH / "lightgbm_model.txt",
+    DASH / "lightgbm_v11_model.txt",
+    OUT / "lightgbm_v11_metrics.json",
+    OUT / "scorecard_metrics.json",
+    OUT / "bootstrap_v11_vs_logistic.csv",
+    OUT / "bootstrap_v11_vs_v10.csv",
+    OUT / "tuning_trials.csv",
+    OUT / "scorecard" / "points_table.csv",
+    OUT / "scorecard" / "iv_table.csv",
+    DASH / "feature_importance_challenger.csv",
     DASH / "stability_score_psi.csv",
     DASH / "stability_feature_csi.csv",
     DASH / "data_quality.csv",
@@ -63,10 +71,16 @@ RED = "#FF6B7A"
 MUTED = "#A8B7CA"
 TEXT = "#E7EEF8"
 
+PURPLE = "#B490FF"
+CHALLENGER = "LightGBM v1.1"
+CH_COL = "lightgbm_v11_score"
 MODELS = {
-    "LightGBM": ("lightgbm_score", TEAL),
+    "LightGBM v1.1": ("lightgbm_v11_score", TEAL),
+    "LightGBM v1.0": ("lightgbm_score", PURPLE),
+    "WoE Scorecard": ("scorecard_score", ORANGE),
     "Logistic Regression": ("logistic_score", BLUE),
 }
+GAP_NAMES = {"LightGBM v1.0": "LightGBM"}
 
 GRADE_COLORS = {
     "A": "#2BB673", "B": TEAL, "C": BLUE, "D": ORANGE, "E": "#FF8A5B", "F": RED,
@@ -113,11 +127,17 @@ def load_data():
     pred = pd.read_parquet(DASH / "holdout_scored.parquet")
     return {
         "logistic": logistic,
-        "lightgbm": lightgbm,
+        "lightgbm_v10": lightgbm,
+        "lightgbm": json.loads((OUT / "lightgbm_v11_metrics.json").read_text()),
+        "scorecard_metrics": json.loads((OUT / "scorecard_metrics.json").read_text()),
         "pred": pred,
-        "comparison": pd.read_csv(OUT / "model_comparison.csv"),
-        "importance": pd.read_csv(OUT / "feature_importance.csv"),
-        "bootstrap": pd.read_csv(OUT / "bootstrap_validation.csv"),
+        "importance": pd.read_csv(DASH / "feature_importance_challenger.csv"),
+        "bootstrap_v10": pd.read_csv(OUT / "bootstrap_validation.csv"),
+        "bootstrap": pd.read_csv(OUT / "bootstrap_v11_vs_logistic.csv"),
+        "bootstrap_v11_v10": pd.read_csv(OUT / "bootstrap_v11_vs_v10.csv"),
+        "trials": pd.read_csv(OUT / "tuning_trials.csv"),
+        "points": pd.read_csv(OUT / "scorecard" / "points_table.csv"),
+        "iv": pd.read_csv(OUT / "scorecard" / "iv_table.csv"),
         "gap": pd.read_csv(OUT / "generalization_gap.csv"),
         "shap_sample": pd.read_parquet(DASH / "shap_sample.parquet"),
         "shap_global": pd.read_csv(DASH / "shap_global.csv"),
@@ -130,7 +150,7 @@ def load_data():
 
 @st.cache_resource
 def load_booster():
-    return lgb.Booster(model_file=str(DASH / "lightgbm_model.txt"))
+    return lgb.Booster(model_file=str(DASH / "lightgbm_v11_model.txt"))
 
 
 data = load_data()
@@ -344,6 +364,12 @@ def chart_style(fig, height=360):
         margin=dict(l=35, r=20, t=35, b=45),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
+    if fig.layout.title.text:
+        # Title on its own line above the legend
+        fig.update_layout(
+            margin=dict(t=78),
+            title=dict(x=0.01, xanchor="left", y=0.97, yanchor="top", yref="container"),
+        )
     fig.update_xaxes(showgrid=False, zeroline=False)
     fig.update_yaxes(gridcolor="#263A50", zeroline=False)
     return fig
@@ -386,6 +412,23 @@ def strategy_curve(score_column, margin, lgd):
         "profit": np.cumsum(pnl),
         "cutoff_pd": pred[score_column].to_numpy()[order],
     })
+
+
+@st.cache_data
+def model_metrics_table():
+    from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+    gap = data["gap"].set_index("Model")
+    rows = []
+    for name, (column, _) in MODELS.items():
+        y, p = pred["target"], pred[column]
+        _, ks, _, _ = rm.ks_curve(y, p)
+        auc = roc_auc_score(y, p)
+        rows.append({
+            "Model": name, "ROC-AUC": auc, "Gini": 2 * auc - 1, "KS": ks,
+            "PR-AUC": average_precision_score(y, p), "Brier": brier_score_loss(y, p),
+            "Train–holdout gap": float(gap.loc[GAP_NAMES.get(name, name), "AUC Gap"]),
+        })
+    return pd.DataFrame(rows)
 
 
 def at_approval(curve, rate):
@@ -496,20 +539,30 @@ def bootstrap_chart(boot):
             ),
         ))
     fig.add_vline(x=0, line_color=MUTED, line_dash="dash")
-    fig.update_layout(xaxis_title="LightGBM − Logistic (95% bootstrap CI)")
+    fig.update_layout(xaxis_title="Challenger − Logistic (95% bootstrap CI)")
     return chart_style(fig, 300)
 
 
 def gap_chart(gap):
+    names = {v: k for k, v in GAP_NAMES.items()}
+    order = [m for m in reversed(list(MODELS))]
+    gap = gap.assign(Model=gap["Model"].map(lambda m: names.get(m, m)))
+    gap = gap.set_index("Model").reindex([m for m in order if m in set(gap["Model"])]).reset_index()
     fig = go.Figure()
     for col, color in [("Train ROC-AUC", MUTED), ("Holdout ROC-AUC", TEAL)]:
         fig.add_trace(go.Bar(
             x=gap["Model"], y=gap[col], name=col, marker_color=color,
             text=gap[col].map(lambda v: f"{v:.3f}"), textposition="outside",
         ))
+    for i, r in gap.iterrows():
+        fig.add_annotation(
+            x=r["Model"], y=max(r["Train ROC-AUC"], r["Holdout ROC-AUC"]) + 0.03,
+            text=f"gap {r['AUC Gap']:+.3f}", showarrow=False,
+            font=dict(color=RED if r["AUC Gap"] > 0.05 else ORANGE if r["AUC Gap"] > 0.02 else TEAL),
+        )
     fig.update_layout(barmode="group", yaxis_title="ROC-AUC")
-    fig.update_yaxes(range=[0.5, 0.82])
-    return chart_style(fig, 320)
+    fig.update_yaxes(range=[0.5, 0.84])
+    return chart_style(fig, 340)
 
 
 def ks_chart(column, color):
@@ -603,14 +656,16 @@ def rag_table_html(table):
 
 @st.cache_data
 def scorecard(model):
+    boots = {"LightGBM v1.1": data["bootstrap"], "LightGBM v1.0": data["bootstrap_v10"]}
     return rm.validation_scorecard(
-        pred, data["bootstrap"], data["gap"], data["psi"], data["dq"], model
+        pred, boots.get(model), data["gap"], data["psi"], data["dq"], model,
+        col=MODELS[model][0], gap_name=GAP_NAMES.get(model, model),
     )
 
 
 # ---------------------------------------------------------------- header
 best = data["bootstrap"].set_index("Metric")
-card_table, card_rating = scorecard("LightGBM")
+card_table, card_rating = scorecard(CHALLENGER)
 card_color = (
     RAG_COLORS["Red"] if card_rating.startswith("Not")
     else RAG_COLORS["Amber"] if "conditions" in card_rating else RAG_COLORS["Green"]
@@ -620,7 +675,7 @@ dots = "".join(
     f'<span class="dot" title="{r.test}: {r.status}" style="background:{RAG_COLORS[r.status]}"></span>'
     for r in card_table.itertuples()
 )
-_, card_gini = rm.lorenz_curve(pred["target"], pred["lightgbm_score"])
+_, card_gini = rm.lorenz_curve(pred["target"], pred[CH_COL])
 
 with st.sidebar:
     st.markdown(
@@ -692,7 +747,7 @@ st.markdown(f"""
       <span class="status" style="color:{card_color};border-color:{card_color}66;background:{card_color}1A">{card_rating}</span>
     </div>
     <div class="mc-grid">
-      <div><div class="k">Model</div><div class="v">LightGBM challenger v1.0</div></div>
+      <div><div class="k">Model</div><div class="v">LightGBM challenger v1.1</div></div>
       <div><div class="k">Benchmark</div><div class="v">Logistic Regression</div></div>
       <div><div class="k">Use</div><div class="v">Application PD · grading · cut-off</div></div>
       <div><div class="k">Validation sample</div><div class="v">{len(pred):,} applicants</div></div>
@@ -709,12 +764,14 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 (
-    overview, insights_tab, models_tab, strategy_tab, policy_tab, applicant_tab, validation_tab
+    overview, insights_tab, models_tab, strategy_tab, capital_tab, policy_tab, applicant_tab,
+    validation_tab,
 ) = st.tabs([
     ":material/space_dashboard: Overview",
     ":material/pie_chart: Portfolio Insights",
     ":material/compare_arrows: Model Comparison",
     ":material/tune: Credit Strategy",
+    ":material/account_balance: Capital & Stress",
     ":material/rule: Policy Simulator",
     ":material/person_search: Applicant Explorer",
     ":material/verified: Model Validation",
@@ -722,12 +779,12 @@ st.markdown(f"""
 
 # ================================================================= OVERVIEW
 with overview:
-    deciles = risk_deciles("lightgbm_score")
+    deciles = risk_deciles(CH_COL)
     top = deciles.iloc[-1]
     lift = top["target_rate"] / PORTFOLIO_RATE
     capture = top["cases"] / pred["target"].sum()
 
-    lgb_curve = strategy_curve("lightgbm_score", 0.10, 0.50)
+    lgb_curve = strategy_curve(CH_COL, 0.10, 0.50)
     log_curve = strategy_curve("logistic_score", 0.10, 0.50)
     lgb80, log80 = at_approval(lgb_curve, 0.80), at_approval(log_curve, 0.80)
     avoided = (log80["bad_rate"] - lgb80["bad_rate"]) * 10_000
@@ -737,7 +794,7 @@ with overview:
     kpi_cards([
         ("Applicants modelled", "307,511", f"{len(pred):,} in the validation holdout", BLUE),
         ("Portfolio bad rate", f"{PORTFOLIO_RATE:.2%}", "TARGET = 1 on the holdout", ORANGE),
-        ("LightGBM Gini", f"{card_gini:.3f}",
+        ("Challenger Gini (v1.1)", f"{card_gini:.3f}",
          f"<b>{card_gini - rm.lorenz_curve(pred['target'], pred['logistic_score'])[1]:+.3f}</b> vs benchmark", TEAL),
         ("Bad rate at 80% approval", f"{lgb80['bad_rate']:.2%}",
          f"<b>{(lgb80['bad_rate'] - log80['bad_rate']) * 100:+.2f} pp</b> vs benchmark", TEAL),
@@ -748,7 +805,7 @@ with overview:
     with i1:
         insight(
             "Challenger beats baseline — with evidence",
-            f"LightGBM improves ROC-AUC by <b>{auc_ci['Difference']:+.3f}</b> "
+            f"LightGBM v1.1 improves ROC-AUC by <b>{auc_ci['Difference']:+.3f}</b> "
             f"(95% CI {auc_ci['Difference CI Low']:+.3f} to "
             f"{auc_ci['Difference CI High']:+.3f}). All four metrics improve "
             "and every bootstrap interval excludes zero.",
@@ -763,16 +820,18 @@ with overview:
         )
     with i3:
         insight(
-            "Overfitting signal to fix next",
-            f"LightGBM train AUC is <b>{gap.loc['LightGBM', 'Train ROC-AUC']:.3f}</b> "
-            f"vs <b>{gap.loc['LightGBM', 'Holdout ROC-AUC']:.3f}</b> on holdout "
-            f"(gap {gap.loc['LightGBM', 'AUC Gap']:.3f}); the logistic baseline "
-            "shows no gap. Early stopping and stronger regularisation are next.",
+            "Overfitting found, then fixed",
+            f"Validation flagged v1.0 for overfitting (train–holdout AUC gap "
+            f"<b>{gap.loc['LightGBM', 'AUC Gap']:.3f}</b>). Optuna tuning on a separate fold, "
+            f"early stopping and monotonic constraints cut it to "
+            f"<b>{gap.loc['LightGBM v1.1', 'AUC Gap']:.3f}</b> in v1.1 while holdout AUC "
+            f"moved from {gap.loc['LightGBM', 'Holdout ROC-AUC']:.3f} to "
+            f"<b>{gap.loc['LightGBM v1.1', 'Holdout ROC-AUC']:.3f}</b>.",
         )
 
     section(
         "Performance", "Risk concentration & discrimination",
-        "Applicants ranked by LightGBM score: the riskiest decile carries more than "
+        "Applicants ranked by LightGBM v1.1 score: the riskiest decile carries more than "
         "a quarter of all payment-difficulty cases.",
     )
     left, right = st.columns(2)
@@ -889,16 +948,19 @@ with insights_tab:
 # ================================================================= MODELS
 with models_tab:
     section(
-        "Benchmarking", "Baseline vs challenger",
-        "Both models are scored on the identical 61,503-applicant holdout.",
+        "Benchmarking", "Four models, one holdout",
+        "The logistic benchmark, a traditional WoE scorecard, the original LightGBM v1.0 and "
+        "the remediated LightGBM v1.1 are all scored on the identical 61,503-applicant holdout.",
     )
     st.dataframe(
-        data["comparison"],
+        model_metrics_table(),
         width="stretch",
         hide_index=True,
         column_config={
-            c: st.column_config.NumberColumn(format="%.4f")
-            for c in ["Logistic Regression", "LightGBM", "Difference"]
+            "Model": "Model",
+            **{c: st.column_config.NumberColumn(format="%.4f")
+               for c in ["ROC-AUC", "Gini", "KS", "PR-AUC", "Brier"]},
+            "Train–holdout gap": st.column_config.NumberColumn(format="%+.3f"),
         },
     )
     left, right = st.columns(2)
@@ -916,15 +978,15 @@ with models_tab:
         st.caption(
             "Both models are scored on the same resampled applicants, so the "
             "interval reflects the uncertainty of the *difference*. "
-            "Teal = interval excludes zero in LightGBM's favour."
+            "LightGBM v1.1 vs the logistic benchmark. Teal = interval excludes zero in the challenger's favour."
         )
     with right:
         st.markdown("**Does it generalise? Train vs holdout**")
         show(gap_chart(data["gap"]), "gap_chart")
         st.caption(
-            "LightGBM fits the training data noticeably better than the holdout. "
-            "It still wins on holdout, but the gap argues for early stopping, "
-            "lower tree complexity and an out-of-time test before any deployment."
+            "LightGBM v1.0 fitted the training data far better than the holdout. The "
+            "remediated v1.1 closes most of that gap; the WoE scorecard and logistic "
+            "benchmark show almost none."
         )
 
     section(
@@ -933,8 +995,8 @@ with models_tab:
         "scorecard: separation (KS), concentration (Lorenz / Gini), score distributions and the gains table.",
     )
     diag_model = st.segmented_control(
-        "Model", list(MODELS), default="LightGBM", key="diag_model"
-    ) or "LightGBM"
+        "Model", list(MODELS), default=CHALLENGER, key="diag_model"
+    ) or CHALLENGER
     diag_col, diag_color = MODELS[diag_model]
     left, right = st.columns(2)
     with left:
@@ -973,6 +1035,64 @@ with models_tab:
         )
 
 
+    # ---- traditional WoE scorecard
+    section(
+        "Traditional scorecard", "WoE / IV application scorecard",
+        "The transparent benchmark most banks still run: optimal monotonic binning, "
+        "Weight-of-Evidence logistic regression and a points table on the same 600 / 20:1 / 20 PDO scale.",
+    )
+    scm = data["scorecard_metrics"]
+    kpi_cards([
+        ("Scorecard Gini", f"{2 * scm['roc_auc'] - 1:.3f}",
+         f"vs <b>{2 * data['lightgbm']['roc_auc'] - 1:.3f}</b> for LightGBM v1.1", ORANGE),
+        ("KS", f"{scm['ks']:.3f}", f"vs <b>{data['lightgbm']['ks']:.3f}</b> for v1.1", ORANGE),
+        ("Variables kept", f"{scm['n_variables']}", "IV ≥ 0.02 after optimal binning", BLUE),
+        ("Train–holdout gap", f"{scm['auc_gap']:+.3f}", "Fully transparent, no overfitting", TEAL),
+    ])
+    left, right = st.columns([2, 3])
+    iv = data["iv"].copy()
+    iv = iv[iv["iv"] > 0].sort_values("iv").tail(15)
+    with left:
+        def iv_color(v):
+            return RED if v < 0.02 else MUTED if v < 0.1 else BLUE if v < 0.3 else TEAL
+        fig = go.Figure(go.Bar(
+            x=iv["iv"], y=iv["name"].map(label), orientation="h",
+            marker_color=[iv_color(v) for v in iv["iv"]],
+            text=iv["iv"].map(lambda v: f"{v:.3f}"), textposition="outside", cliponaxis=False,
+        ))
+        fig.add_vline(x=0.02, line_color=RED, line_dash="dot")
+        fig.add_vline(x=0.1, line_color=MUTED, line_dash="dot")
+        fig.update_layout(title=dict(text="Information Value by characteristic", font=dict(size=14)),
+                          xaxis_title="IV (0.02 weak · 0.1 medium · 0.3 strong)")
+        fig.update_yaxes(automargin=True)
+        show(chart_style(fig, 470).update_layout(margin=dict(l=35, r=50, t=45, b=45)), "iv_chart")
+    with right:
+        points = data["points"].copy()
+        variables = [v for v in data["iv"].sort_values("iv", ascending=False)["name"] if v in set(points["Variable"])]
+        var = st.selectbox("Characteristic", variables, format_func=label, key="sc_var")
+        pv = points[points["Variable"] == var].copy()
+        pv = pv[pv["Count (%)"] > 0]
+        fig = go.Figure(go.Bar(
+            x=pv["Bin"].astype(str), y=pv["Points"],
+            marker_color=[TEAL if p >= pv["Points"].median() else ORANGE for p in pv["Points"]],
+            text=pv["Points"].map(lambda v: f"{v:.0f}"), textposition="outside",
+            customdata=np.stack([pv["Count (%)"] * 100, pv["Event rate"] * 100], axis=1),
+            hovertemplate="%{x}<br>Points %{y:.0f}<br>Share %{customdata[0]:.1f}%<br>"
+                          "Bad rate %{customdata[1]:.1f}%<extra></extra>",
+        ))
+        fig.update_layout(title=dict(text=f"Points by attribute: {label(var)}", font=dict(size=14)),
+                          xaxis_title="Attribute (bin)", yaxis_title="Points")
+        show(chart_style(fig, 300), "points_chart")
+        st.dataframe(
+            pv[["Bin", "Count (%)", "Event rate", "WoE", "Points"]], hide_index=True, width="stretch",
+            column_config={
+                "Count (%)": st.column_config.NumberColumn("Share", format="percent"),
+                "Event rate": st.column_config.NumberColumn("Bad rate", format="percent"),
+                "WoE": st.column_config.NumberColumn(format="%.3f"),
+                "Points": st.column_config.NumberColumn(format="%.0f"),
+            },
+        )
+
 # ================================================================= STRATEGY
 with strategy_tab:
     section("Decisioning", "From probability to decision")
@@ -985,8 +1105,8 @@ with strategy_tab:
     ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1, 1])
     with ctrl1:
         model_choice = st.segmented_control(
-            "Scoring model", list(MODELS), default="LightGBM", key="strategy_model"
-        ) or "LightGBM"
+            "Scoring model", list(MODELS), default=CHALLENGER, key="strategy_model"
+        ) or CHALLENGER
     with ctrl2:
         margin = st.slider(
             "Net revenue on a good loan (% of credit)", 1, 30, 10, key="margin"
@@ -1050,7 +1170,7 @@ with strategy_tab:
     # ---- approval strategy
     section("Cut-off strategy", "Approval-rate trade-off")
     curve = strategy_curve(column, margin, lgd)
-    other_name = next(m for m in MODELS if m != model_choice)
+    other_name = "Logistic Regression" if model_choice != "Logistic Regression" else CHALLENGER
     other_curve = strategy_curve(MODELS[other_name][0], margin, lgd)
     best_idx = int(curve["profit"].idxmax())
     best_row = curve.iloc[best_idx]
@@ -1177,6 +1297,145 @@ with strategy_tab:
         else:
             st.success("All age bands keep an impact ratio of at least 0.8 at this cut-off.")
 
+# ================================================================= CAPITAL
+with capital_tab:
+    section(
+        "Basel IRB · pricing", "Capital, expected loss and risk-based pricing",
+        "Each grade's expected loss (PD × LGD × EAD) and Basel IRB capital for retail "
+        "exposures, turned into the minimum interest rate the grade must earn.",
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        cap_model = st.selectbox("Model", list(MODELS), index=0, key="cap_model")
+    with c2:
+        cap_lgd = st.slider("LGD (%)", 20, 90, 45, 5, key="cap_lgd") / 100
+    with c3:
+        cap_funding = st.slider("Funding cost (%)", 2.0, 12.0, 6.0, 0.5, key="cap_funding") / 100
+    with c4:
+        cap_hurdle = st.slider("Hurdle ROE (%)", 5, 30, 15, key="cap_hurdle") / 100
+    with c5:
+        cap_cap = st.slider("Maximum annual rate (%)", 15, 60, 35, key="cap_rate_cap") / 100
+    cap_opex = 0.03
+
+    cap_col = MODELS[cap_model][0]
+    cap_pd = pred[cap_col].to_numpy()
+    cap_grades = score_to_grade(pd_to_score(cap_pd))
+    econ = rm.grade_economics(
+        cap_pd, pred["credit_amount"], cap_grades,
+        lgd=cap_lgd, funding=cap_funding, opex=cap_opex, hurdle=cap_hurdle,
+    )
+    total_ead = econ["ead"].sum()
+    kpi_cards([
+        ("Exposure (EAD)", fmt_money(total_ead), f"{len(pred):,} holdout loans", BLUE),
+        ("Expected loss", fmt_money(econ["el"].sum()), f"<b>{econ['el'].sum() / total_ead:.2%}</b> of EAD", ORANGE),
+        ("IRB capital (K)", fmt_money(econ["capital"].sum()),
+         f"<b>{econ['capital'].sum() / total_ead:.2%}</b> of EAD", TEAL),
+        ("RWA density", f"{econ['rwa'].sum() / total_ead:.0%}", "Risk-weighted assets / EAD", BLUE),
+    ])
+
+    left, right = st.columns([3, 2])
+    with left:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=econ["grade"], y=[cap_funding * 100] * len(econ), name="Funding",
+                             marker_color="#3B4B63"))
+        fig.add_trace(go.Bar(x=econ["grade"], y=[cap_opex * 100] * len(econ), name="Operating cost",
+                             marker_color="#52627A"))
+        fig.add_trace(go.Bar(x=econ["grade"], y=econ["el_rate"] * 100, name="Expected loss",
+                             marker_color=ORANGE))
+        fig.add_trace(go.Bar(x=econ["grade"], y=econ["k_rate"] * cap_hurdle * 100,
+                             name="Cost of capital", marker_color=TEAL))
+        fig.add_hline(y=cap_cap * 100, line_color=RED, line_dash="dash",
+                      annotation_text=f"Rate cap {cap_cap:.0%}", annotation_font_color=RED)
+        for _, r in econ.iterrows():
+            fig.add_annotation(x=r["grade"], y=r["min_rate"] * 100 + 1.5, text=f"{r['min_rate']:.1%}",
+                               showarrow=False, font=dict(color=TEXT))
+        fig.update_layout(barmode="stack", xaxis_title="Risk grade",
+                          yaxis_title="Minimum annual rate (%)",
+                          title=dict(text="Risk-based price build-up by grade", font=dict(size=14)))
+        show(chart_style(fig, 400), "pricing_chart")
+    with right:
+        econ_view = econ[["grade", "applicants", "avg_pd", "el_rate", "k_rate", "min_rate"]].copy()
+        econ_view["viable"] = np.where(econ_view["min_rate"] <= cap_cap, "✅ Lend", "❌ Above cap")
+        st.dataframe(
+            econ_view, hide_index=True, width="stretch",
+            column_config={
+                "grade": "Grade",
+                "applicants": st.column_config.NumberColumn("N", format="%d"),
+                "avg_pd": st.column_config.NumberColumn("PD", format="percent"),
+                "el_rate": st.column_config.NumberColumn("EL", format="percent"),
+                "k_rate": st.column_config.NumberColumn("IRB K", format="percent"),
+                "min_rate": st.column_config.NumberColumn("Min. rate", format="percent"),
+                "viable": "At cap",
+            },
+        )
+        unviable = econ_view.loc[econ_view["min_rate"] > cap_cap, "grade"].tolist()
+        insight(
+            "Pricing verdict",
+            (f"Grades <b>{', '.join(unviable)}</b> cannot be priced profitably under a "
+             f"{cap_cap:.0%} cap: decline them or require collateral / a co-signer."
+             if unviable else
+             f"Every grade can be priced profitably under a {cap_cap:.0%} cap; "
+             "grade F still needs the widest margin.")
+            + f" Price spread from grade A to F: <b>{econ['min_rate'].iloc[0]:.1%} → "
+              f"{econ['min_rate'].iloc[-1]:.1%}</b>.",
+        )
+    st.caption(
+        "Basel IRB formula for other retail exposures: correlation between 3% and 16%, 99.9% "
+        "confidence, no maturity adjustment, 5 bp PD floor. PD is treated as a 12-month PD and "
+        "EAD as the credit amount. Operating cost fixed at 3%. Illustrative, not a regulatory return."
+    )
+
+    # ---- stress test
+    section(
+        "Stress testing", "What happens in a downturn?",
+        "PDs are stressed by scaling the odds of default (rank order preserved) and LGD is "
+        "raised; the score cut-off for 80% approval under the baseline is held fixed.",
+    )
+    st_cutoff = pd_to_score(np.quantile(cap_pd, 0.80))
+    stress = rm.stress_test(cap_pd, pred["credit_amount"], lgd=cap_lgd, cutoff_score=st_cutoff)
+    base_row = stress.iloc[0]
+    left, right = st.columns([3, 2])
+    with left:
+        fig = go.Figure()
+        colors = [TEAL, ORANGE, RED]
+        fig.add_trace(go.Bar(
+            x=stress["scenario"], y=stress["expected_loss"], name="Expected loss",
+            marker_color=colors, text=[fmt_money(v) for v in stress["expected_loss"]],
+            textposition="outside", offsetgroup=0,
+        ))
+        fig.add_trace(go.Bar(
+            x=stress["scenario"], y=stress["capital"], name="IRB capital",
+            marker_color=["rgba(49,198,176,.45)", "rgba(255,179,107,.45)", "rgba(255,107,122,.45)"],
+            text=[fmt_money(v) for v in stress["capital"]], textposition="outside", offsetgroup=1,
+        ))
+        fig.update_layout(barmode="group", yaxis_title="Amount",
+                          title=dict(text="Expected loss and capital by scenario", font=dict(size=14)))
+        show(chart_style(fig, 380), "stress_chart")
+    with right:
+        view = stress[["scenario", "odds_multiplier", "lgd", "avg_pd", "el_rate",
+                       "approval_rate", "share_grade_ef"]]
+        st.dataframe(
+            view, hide_index=True, width="stretch",
+            column_config={
+                "scenario": "Scenario",
+                "odds_multiplier": st.column_config.NumberColumn("PD odds ×", format="%.2f"),
+                "lgd": st.column_config.NumberColumn("LGD", format="percent"),
+                "avg_pd": st.column_config.NumberColumn("Avg PD", format="percent"),
+                "el_rate": st.column_config.NumberColumn("EL / EAD", format="percent"),
+                "approval_rate": st.column_config.NumberColumn("Approved", format="percent"),
+                "share_grade_ef": st.column_config.NumberColumn("In E/F", format="percent"),
+            },
+        )
+        severe = stress.iloc[-1]
+        insight(
+            "Stress verdict",
+            f"In the severely adverse scenario, expected loss rises "
+            f"<b>{severe['expected_loss'] / base_row['expected_loss']:.1f}x</b> and IRB capital "
+            f"<b>{severe['capital'] / base_row['capital'] - 1:+.0%}</b>. With the cut-off unchanged, approval "
+            f"falls from {base_row['approval_rate']:.0%} to <b>{severe['approval_rate']:.0%}</b> "
+            f"as {severe['share_grade_ef']:.0%} of applicants migrate to grades E/F.",
+        )
+
 # ================================================================= POLICY
 with policy_tab:
     section("Credit policy", "Policy simulator")
@@ -1189,8 +1448,8 @@ with policy_tab:
     controls, results = st.columns([1, 2.2], gap="large")
     with controls:
         pol_model = st.segmented_control(
-            "Scoring model", list(MODELS), default="LightGBM", key="pol_model"
-        ) or "LightGBM"
+            "Scoring model", list(MODELS), default=CHALLENGER, key="pol_model"
+        ) or CHALLENGER
         pol_col = MODELS[pol_model][0]
         pol_scores = pd_to_score(pred[pol_col])
         min_score = st.slider("Minimum credit score", 520, 640, 570, 1, key="pol_score")
@@ -1314,7 +1573,7 @@ with policy_tab:
     section("Champion vs challenger", "Swap-set analysis")
     st.caption(
         "At the same approval rate, which applicants does switching from the logistic benchmark "
-        "to LightGBM newly approve (swap-in) or newly decline (swap-out)? A good challenger swaps "
+        "to LightGBM v1.1 newly approve (swap-in) or newly decline (swap-out)? A good challenger swaps "
         "out riskier applicants than it swaps in."
     )
     swap_rate = st.slider("Approval rate for both models", 0.50, 0.95, 0.80, 0.01,
@@ -1323,10 +1582,10 @@ with policy_tab:
     lr_ok = np.zeros(n_all, dtype=bool)
     gb_ok = np.zeros(n_all, dtype=bool)
     lr_ok[np.argsort(pred["logistic_score"].to_numpy(), kind="stable")[:k]] = True
-    gb_ok[np.argsort(pred["lightgbm_score"].to_numpy(), kind="stable")[:k]] = True
+    gb_ok[np.argsort(pred[CH_COL].to_numpy(), kind="stable")[:k]] = True
     cells = {
         "Approved by both": lr_ok & gb_ok,
-        "Swap-in (LightGBM only)": ~lr_ok & gb_ok,
+        "Swap-in (LightGBM v1.1 only)": ~lr_ok & gb_ok,
         "Swap-out (benchmark only)": lr_ok & ~gb_ok,
         "Declined by both": ~lr_ok & ~gb_ok,
     }
@@ -1345,7 +1604,7 @@ with policy_tab:
               [swap.loc[2, "bad_rate"], swap.loc[3, "bad_rate"]]]
         fig = go.Figure(go.Heatmap(
             z=br, x=["Benchmark approves", "Benchmark declines"],
-            y=["LightGBM approves", "LightGBM declines"],
+            y=["v1.1 approves", "v1.1 declines"],
             text=[[f"{z[i][j]:,}<br>bad rate {br[i][j]:.1%}" for j in range(2)] for i in range(2)],
             texttemplate="%{text}", colorscale=[[0, TEAL], [0.5, ORANGE], [1, RED]],
             showscale=False, hoverinfo="skip",
@@ -1356,7 +1615,7 @@ with policy_tab:
         swap_in, swap_out = swap.loc[1], swap.loc[2]
         insight(
             "Swap-set verdict",
-            f"Switching to LightGBM at {swap_rate:.0%} approval swaps in "
+            f"Switching to LightGBM v1.1 at {swap_rate:.0%} approval swaps in "
             f"<b>{swap_in['applicants']:,}</b> applicants with a bad rate of "
             f"<b>{swap_in['bad_rate']:.1%}</b> and swaps out <b>{swap_out['applicants']:,}</b> "
             f"with a bad rate of <b>{swap_out['bad_rate']:.1%}</b>. "
@@ -1378,16 +1637,16 @@ with policy_tab:
 with applicant_tab:
     section("Explainability", "Why did the model score this applicant this way?")
     st.caption(
-        "TreeSHAP decomposes each LightGBM prediction (in log-odds) into the "
+        "TreeSHAP decomposes each LightGBM v1.1 prediction (in log-odds) into the "
         "contribution of every feature. A random sample of 5,000 holdout applicants is available."
     )
     shap_sample = data["shap_sample"]
     sample_pred = pred.set_index("applicant_id").loc[shap_sample["applicant_id"]]
-    sample_pred = sample_pred.assign(score=pd_to_score(sample_pred["lightgbm_score"]))
+    sample_pred = sample_pred.assign(score=pd_to_score(sample_pred[CH_COL]))
 
     tiers = {
-        "Highest risk": sample_pred.sort_values("lightgbm_score", ascending=False),
-        "Lowest risk": sample_pred.sort_values("lightgbm_score"),
+        "Highest risk": sample_pred.sort_values(CH_COL, ascending=False),
+        "Lowest risk": sample_pred.sort_values(CH_COL),
         "Defaulted (TARGET = 1)": sample_pred[sample_pred["target"] == 1],
         "All sampled": sample_pred,
     }
@@ -1401,7 +1660,7 @@ with applicant_tab:
             options,
             format_func=lambda i: (
                 f"{i} · score {sample_pred.loc[i, 'score']:.0f} · "
-                f"PD {sample_pred.loc[i, 'lightgbm_score']:.1%}"
+                f"PD {sample_pred.loc[i, CH_COL]:.1%}"
             ),
             key="applicant_id",
         )
@@ -1410,10 +1669,10 @@ with applicant_tab:
     contrib = shap_sample.set_index("applicant_id").loc[applicant_id]
     base_value = float(contrib["base_value"])
     contrib = contrib[FEATURES].astype(float)
-    pd_value = float(applicant["lightgbm_score"])
+    pd_value = float(applicant[CH_COL])
     score_value = float(pd_to_score(pd_value))
     grade = score_to_grade(score_value)[0]
-    decile = int(np.ceil((pred["lightgbm_score"] < pd_value).mean() * 10)) or 1
+    decile = int(np.ceil((pred[CH_COL] < pd_value).mean() * 10)) or 1
 
     def fmt_value(feature, value):
         if pd.isna(value):
@@ -1447,7 +1706,7 @@ with applicant_tab:
     )
 
     # ---- credit decision (illustrative policy: 80% approval cut-off, 10-point refer band)
-    cutoff_score = pd_to_score(np.quantile(pred["lightgbm_score"], 0.80))
+    cutoff_score = pd_to_score(np.quantile(pred[CH_COL], 0.80))
     if score_value >= cutoff_score:
         decision, dcolor = "Approve", "#2BB673"
         why = f"Score {score_value:.0f} is at or above the cut-off of {cutoff_score:.0f}."
@@ -1534,7 +1793,7 @@ with applicant_tab:
     # ---- what-if simulator
     section("Sensitivity", "What-if simulator")
     st.caption(
-        "Change the application and re-score it live with the saved LightGBM model. "
+        "Change the application and re-score it live with the saved LightGBM v1.1 model. "
         "Credit-to-income and annuity-to-income are recomputed automatically."
     )
 
@@ -1622,11 +1881,11 @@ with validation_tab:
     section("Model risk", "Validation scorecard")
     st.caption(
         "Each test is rated Green / Amber / Red against pre-defined thresholds, in the style "
-        "of a bank model-risk review. Any Red or unassessed test blocks production approval."
+        "of a bank model-risk review. Any Red blocks approval; Amber or unassessed tests become conditions of approval."
     )
     val_model = st.segmented_control(
-        "Model under review", list(MODELS), default="LightGBM", key="val_model"
-    ) or "LightGBM"
+        "Model under review", list(MODELS), default=CHALLENGER, key="val_model"
+    ) or CHALLENGER
     sc_table, rating = scorecard(val_model)
     counts = sc_table["status"].value_counts()
     rating_color = (
@@ -1662,6 +1921,101 @@ with validation_tab:
             mime="application/pdf",
             type="primary",
             key="download_pdf_report",
+        )
+
+    # ---- remediation v1.0 -> v1.1
+    section(
+        "Remediation", "From v1.0 to v1.1: closing the findings",
+        "Validation of v1.0 raised a Red overfitting finding. The model owner retrained it; "
+        "the same tests were re-run on the untouched holdout.",
+    )
+    t10, r10 = scorecard("LightGBM v1.0")
+    t11, r11 = scorecard("LightGBM v1.1")
+
+    def rating_color(r):
+        return RAG_COLORS["Red"] if r.startswith("Not") else RAG_COLORS["Amber"] if "conditions" in r else RAG_COLORS["Green"]
+
+    rc1, rc2 = st.columns(2)
+    for col_, name, rating_, table_ in [(rc1, "LightGBM v1.0", r10, t10), (rc2, "LightGBM v1.1", r11, t11)]:
+        cnt = table_["status"].value_counts()
+        col_.markdown(
+            f'<div class="rating"><div><div class="meta">{name}</div>'
+            f'<div class="big" style="color:{rating_color(rating_)}">{rating_}</div></div>'
+            f'<div class="meta">{cnt.get("Green", 0)} Green · {cnt.get("Amber", 0)} Amber · '
+            f'{cnt.get("Red", 0)} Red · {cnt.get("Not assessed", 0)} Not assessed</div></div>',
+            unsafe_allow_html=True,
+        )
+    compare = t10[["test", "result", "status"]].merge(
+        t11[["test", "result", "status"]], on="test", suffixes=(" v1.0", " v1.1"))
+    rows_html = "".join(
+        f"<tr><td class='t'>{r['test']}</td><td class='r'>{r['result v1.0']}</td>"
+        f"<td>{rag_pill(r['status v1.0'])}</td><td class='r'>{r['result v1.1']}</td>"
+        f"<td>{rag_pill(r['status v1.1'])}</td></tr>"
+        for _, r in compare.iterrows()
+    )
+    st.markdown(
+        "<div class='rag-wrap'><table class='rag'><thead><tr><th>Test</th><th>v1.0 result</th>"
+        "<th>v1.0</th><th>v1.1 result</th><th>v1.1</th></tr></thead>"
+        f"<tbody>{rows_html}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+    gap_tbl = data["gap"].set_index("Model")
+    v11 = data["lightgbm"]
+    left, right = st.columns([3, 2])
+    with left:
+        trials = data["trials"].dropna(subset=["user_attrs_val_auc"])
+        best_n = v11["tuning"]["best_trial"]
+        fig = go.Figure()
+        fig.add_vrect(x0=-0.01, x1=0.02, fillcolor=TEAL, opacity=0.07, line_width=0)
+        fig.add_vrect(x0=0.02, x1=0.05, fillcolor=ORANGE, opacity=0.07, line_width=0)
+        fig.add_trace(go.Scatter(
+            x=trials["user_attrs_gap"], y=trials["user_attrs_val_auc"], mode="markers",
+            marker=dict(size=10, color=trials["value"], colorscale=[[0, BORDER], [1, BLUE]],
+                        line=dict(width=1, color=NAVY)),
+            name="Optuna trial",
+            customdata=np.stack([trials["number"], trials["user_attrs_best_iteration"]], axis=1),
+            hovertemplate="Trial %{customdata[0]}<br>Validation AUC %{y:.4f}<br>"
+                          "Gap %{x:.4f}<br>Trees %{customdata[1]}<extra></extra>",
+        ))
+        b = trials[trials["number"] == best_n]
+        fig.add_trace(go.Scatter(
+            x=b["user_attrs_gap"], y=b["user_attrs_val_auc"], mode="markers+text",
+            marker=dict(size=18, color=TEAL, symbol="star", line=dict(width=1, color=NAVY)),
+            text=["Selected"], textposition="top center", name="Selected (v1.1)",
+        ))
+        fig.update_layout(
+            title=dict(text=f"Optuna search: {len(trials)} trials on a validation fold", font=dict(size=14)),
+            xaxis_title="Fit − validation AUC gap (green < 0.02, amber < 0.05)",
+            yaxis_title="Validation ROC-AUC",
+        )
+        show(chart_style(fig, 380), "optuna_chart")
+    with right:
+        b11 = data["bootstrap_v11_v10"].set_index("Metric").loc["ROC-AUC"]
+        findings = pd.DataFrame([
+            ("F-01", "Overfitting",
+             f"Closed: gap {gap_tbl.loc['LightGBM', 'AUC Gap']:.3f} → {gap_tbl.loc['LightGBM v1.1', 'AUC Gap']:.3f}"
+             if gap_tbl.loc["LightGBM v1.1", "AUC Gap"] <= 0.05 else "Open"),
+            ("F-05", "Holdout reuse", "Closed: tuned on a validation fold; holdout untouched"),
+            ("F-02", "No out-of-time test", "Open: condition of approval"),
+            ("F-03", "Point-in-time audit", "Open: condition of approval"),
+            ("F-04", "Age-band disparity",
+             "Escalated: impact ratio " + t10.set_index("test").loc["Fairness (age impact ratio)", "result"].split()[0]
+             + " → " + t11.set_index("test").loc["Fairness (age impact ratio)", "result"].split()[0]
+             + ", blocks approval"
+             if t11.set_index("test").loc["Fairness (age impact ratio)", "status"] == "Red"
+             else "Open: monitor; justification documented"),
+            ("F-06", "Label definition", "Accepted limitation"),
+        ], columns=["ID", "Finding", "Status after remediation"])
+        st.dataframe(findings, hide_index=True, width="stretch")
+        insight(
+            "What changed",
+            f"Monotonic constraints on {len(v11['monotone_constraints'])} risk drivers, "
+            f"{v11['n_trees']} trees with {v11['params']['num_leaves']} leaves and at least "
+            f"{v11['params']['min_child_samples']} applicants per leaf. Against v1.0, ROC-AUC changes by "
+            f"<b>{b11['Difference']:+.4f}</b> (95% CI {b11['Difference CI Low']:+.4f} to "
+            f"{b11['Difference CI High']:+.4f}): discrimination is kept while the overfitting is removed. "
+            "The trade-off: the under-25 approval impact ratio slipped, so fairness is now the blocking finding.",
         )
 
     section("Accuracy of PDs", "Calibration")
@@ -1738,7 +2092,7 @@ with validation_tab:
         },
     )
 
-    section("Explainability", "What drives LightGBM?")
+    section("Explainability", "What drives LightGBM v1.1?")
     left, right = st.columns(2)
     shap_global = data["shap_global"].head(15).iloc[::-1]
     with left:
@@ -1775,7 +2129,7 @@ with validation_tab:
     with d1:
         st.download_button(
             "Export model comparison (CSV)",
-            data["comparison"].to_csv(index=False),
+            model_metrics_table().to_csv(index=False),
             file_name="model_comparison.csv",
             mime="text/csv",
         )

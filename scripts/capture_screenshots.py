@@ -35,6 +35,10 @@ SHOTS = [
     ("06_swap_set.jpg", "Policy Simulator", "Swap-set analysis"),
     ("07_applicant_explorer.jpg", "Applicant Explorer", "Browse"),
     ("08_validation_scorecard.jpg", "Model Validation", "Validation scorecard"),
+    ("09_capital_pricing.jpg", "Capital & Stress", "Capital, expected loss"),
+    ("10_stress_test.jpg", "Capital & Stress", "What happens in a downturn?"),
+    ("11_remediation.jpg", "Model Validation", "From v1.0 to v1.1"),
+    ("12_woe_scorecard.jpg", "Model Comparison", "WoE / IV application scorecard"),
 ]
 
 

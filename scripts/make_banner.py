@@ -58,15 +58,15 @@ p {{ color: #A8B7CA; font-size: 20px; line-height: 1.45; }}
     <div class="eyebrow">MODEL RISK · CREDIT POLICY</div>
   </div>
   <h1>Credit Risk<br><span>Intelligence</span></h1>
-  <p>PD modelling, independent validation and credit-policy decisioning on 307,511 consumer-loan applicants.</p>
+  <p>PD modelling, independent validation, remediation and credit-policy decisioning on 307,511 consumer-loan applicants.</p>
   <div class="stats">
-    <div class="stat"><b>0.405</b><span>Gini</span></div>
-    <div class="stat"><b>0.301</b><span>KS</span></div>
-    <div class="stat"><b>−0.26 pp</b><span>bad rate @ 80% approval</span></div>
-    <div class="stat"><b>11</b><span>validation tests</span></div>
+    <div class="stat"><b>0.406</b><span>Gini</span></div>
+    <div class="stat"><b>0.304</b><span>KS</span></div>
+    <div class="stat"><b>0.061 → 0.016</b><span>overfitting gap fixed</span></div>
+    <div class="stat"><b>Basel IRB</b><span>capital & pricing</span></div>
   </div>
 </div>
-<div class="tech">PostgreSQL · Python · LightGBM · TreeSHAP · Streamlit</div>
+<div class="tech">PostgreSQL · Python · LightGBM · Optuna · WoE scorecard · Basel IRB · Streamlit</div>
 </body></html>"""
 
 html_path = DOCS / "_banner.html"

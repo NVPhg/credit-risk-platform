@@ -12,3 +12,4 @@ outputs/holdout_predictions.csv
 .claude/
 .streamlit/secrets.toml
 docs/*.html
+outputs/scorecard/*.joblib

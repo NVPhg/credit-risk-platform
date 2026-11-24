@@ -167,10 +167,11 @@ def band(value, green, amber, higher_is_better=True):
 
 
 def overall_rating(statuses):
+    """Any Red blocks approval; Amber or unassessed tests become approval conditions."""
     statuses = list(statuses)
-    if "Red" in statuses or "Not assessed" in statuses:
+    if "Red" in statuses:
         return "Not approved for production"
-    if "Amber" in statuses:
+    if "Amber" in statuses or "Not assessed" in statuses:
         return "Approved with conditions"
     return "Approved"
 
@@ -192,9 +193,18 @@ def age_impact(pred, score_col, approval_rate=0.80):
     return t
 
 
-def validation_scorecard(pred, boot, gap, psi, dq, model="LightGBM"):
-    """RAG assessment of one model. Returns (table, overall rating)."""
-    col = {"LightGBM": "lightgbm_score", "Logistic Regression": "logistic_score"}[model]
+def validation_scorecard(pred, boot, gap, psi, dq, model="LightGBM v1.1", col=None,
+                         gap_name=None, psi_name=None):
+    """RAG assessment of one model. Returns (table, overall rating).
+
+    boot: paired bootstrap of this model vs the logistic benchmark (None for the benchmark
+    itself or when not run). gap_name / psi_name: the model's row label in those files.
+    """
+    col = col or {"LightGBM v1.1": "lightgbm_v11_score", "LightGBM v1.0": "lightgbm_score",
+                  "LightGBM": "lightgbm_score", "WoE Scorecard": "scorecard_score",
+                  "Logistic Regression": "logistic_score"}[model]
+    gap_name = gap_name or model
+    psi_name = psi_name or model
     y, p = pred["target"].to_numpy(), pred[col].to_numpy()
     _, gini = lorenz_curve(y, p)
     _, ks, _, _ = ks_curve(y, p)
@@ -203,24 +213,31 @@ def validation_scorecard(pred, boot, gap, psi, dq, model="LightGBM"):
     fails = int((binom["result"] == "Fail").sum())
     rates = binom["observed_rate"].to_numpy()
     monotonic = bool(np.all(np.diff(rates) > 0))
-    model_gap = float(gap.set_index("Model").loc[model, "AUC Gap"])
-    model_psi = float(psi[psi["model"] == model]["total_psi"].iloc[0])
+    model_gap = float(gap.set_index("Model").loc[gap_name, "AUC Gap"])
+    psi_rows = psi[psi["model"] == psi_name]
+    model_psi = float(psi_rows["total_psi"].iloc[0]) if len(psi_rows) else np.nan
     impact = age_impact(pred, col)
     min_ir = float(impact["impact_ratio"].min())
     worst_band = str(impact.loc[impact["impact_ratio"].idxmin(), "band"])
-    auc = boot.set_index("Metric").loc["ROC-AUC"]
     _, hl_p = hosmer_lemeshow(y, p)
+
+    if boot is not None:
+        auc = boot.set_index("Metric").loc["ROC-AUC"]
+        bench = (f"ΔAUC {auc['Difference']:+.3f} [{auc['Difference CI Low']:+.3f}, "
+                 f"{auc['Difference CI High']:+.3f}]",
+                 "Green" if auc["Difference CI Low"] > 0 else "Red" if auc["Difference CI High"] < 0 else "Amber")
+    elif model == "Logistic Regression":
+        bench = ("This model is the benchmark", "Not assessed")
+    else:
+        bench = ("Bootstrap not run for this model", "Not assessed")
 
     rows = [
         ("Discrimination (Gini)", f"{gini:.3f}", band(gini, 0.40, 0.30),
          "Gini = 2·AUC − 1 on the 61,503-applicant holdout."),
         ("Separation (KS)", f"{ks:.3f}", band(ks, 0.30, 0.20),
          "Maximum distance between cumulative bad and good distributions."),
-        ("Benchmark significance",
-         (f"ΔAUC {auc['Difference']:+.3f} [{auc['Difference CI Low']:+.3f}, {auc['Difference CI High']:+.3f}]"
-          if model == "LightGBM" else "This model is the benchmark"),
-         ("Green" if auc["Difference CI Low"] > 0 else "Amber") if model == "LightGBM" else "Not assessed",
-         "Paired stratified bootstrap, 500 resamples, challenger vs logistic benchmark."),
+        ("Benchmark significance", bench[0], bench[1],
+         "Paired stratified bootstrap, 500 resamples, vs the logistic benchmark."),
         ("Overfitting (train − holdout AUC)", f"{model_gap:.3f}",
          band(model_gap, 0.02, 0.05, higher_is_better=False),
          "Gap between in-sample and holdout ROC-AUC."),
@@ -229,7 +246,8 @@ def validation_scorecard(pred, boot, gap, psi, dq, model="LightGBM"):
          "Two-sided binomial test of observed vs predicted bads per grade (α = 5%)."),
         ("Rank ordering", "Monotonic" if monotonic else "Not monotonic",
          "Green" if monotonic else "Red", "Observed bad rate across grades A → F."),
-        ("Stability (score PSI)", f"{model_psi:.4f}", band(model_psi, 0.10, 0.25, higher_is_better=False),
+        ("Stability (score PSI)", f"{model_psi:.4f}" if not np.isnan(model_psi) else "—",
+         band(model_psi, 0.10, 0.25, higher_is_better=False) if not np.isnan(model_psi) else "Not assessed",
          "Train vs holdout. Random split, so a low PSI is expected; out-of-time PSI is still required."),
         ("Fairness (age impact ratio)", f"{min_ir:.2f} ({worst_band})", band(min_ir, 0.80, 0.60),
          "Lowest approval-rate ratio vs the best-treated age band at 80% approval."),
@@ -241,3 +259,115 @@ def validation_scorecard(pred, boot, gap, psi, dq, model="LightGBM"):
     ]
     table = pd.DataFrame(rows, columns=["test", "result", "status", "note"])
     return table, overall_rating(table["status"])
+
+
+# --------------------------------------------------------------------------- bootstrap
+BOOT_METRICS = ["ROC-AUC", "Average Precision", "KS", "Brier Score"]
+
+
+def _boot_metrics(y, p):
+    from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score, roc_curve
+    fpr, tpr, _ = roc_curve(y, p)
+    return np.array([roc_auc_score(y, p), average_precision_score(y, p),
+                     np.max(tpr - fpr), brier_score_loss(y, p)])
+
+
+def paired_bootstrap(y, base, challenger, n_boot=500, seed=42):
+    """Paired stratified bootstrap of challenger − base (same format as validate_models.py)."""
+    y = np.asarray(y, dtype=int)
+    base, challenger = np.asarray(base), np.asarray(challenger)
+    rng = np.random.default_rng(seed)
+    pos, neg = np.flatnonzero(y == 1), np.flatnonzero(y == 0)
+    b0, c0 = _boot_metrics(y, base), _boot_metrics(y, challenger)
+    bb = np.empty((n_boot, 4))
+    cc = np.empty((n_boot, 4))
+    for i in range(n_boot):
+        idx = np.concatenate([rng.choice(pos, len(pos)), rng.choice(neg, len(neg))])
+        bb[i], cc[i] = _boot_metrics(y[idx], base[idx]), _boot_metrics(y[idx], challenger[idx])
+    rows = []
+    for j, metric in enumerate(BOOT_METRICS):
+        d = cc[:, j] - bb[:, j]
+        lo, hi = np.quantile(d, [0.025, 0.975])
+        if metric == "Brier Score":
+            evidence = "Challenger lower" if hi < 0 else "Challenger higher" if lo > 0 else "Inconclusive"
+        else:
+            evidence = "Challenger higher" if lo > 0 else "Challenger lower" if hi < 0 else "Inconclusive"
+        rows.append({
+            "Metric": metric, "Base": b0[j], "Challenger": c0[j],
+            "Difference": c0[j] - b0[j], "Difference CI Low": lo, "Difference CI High": hi,
+            "Evidence": evidence,
+        })
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- Basel IRB, EL, pricing
+PD_FLOOR = 0.0005  # Basel III floor for retail PDs (5 bp)
+
+
+def irb_retail_k(pd_, lgd):
+    """Basel IRB capital requirement K (share of EAD) for 'other retail' exposures.
+
+    R = 0.03·w + 0.16·(1 − w), w = (1 − e^(−35·PD)) / (1 − e^(−35))
+    K = LGD · N[(G(PD) + √R · G(0.999)) / √(1 − R)] − PD · LGD   (no maturity adjustment for retail)
+    """
+    pd_ = np.clip(np.asarray(pd_, dtype=float), PD_FLOOR, 0.9999)
+    w = (1 - np.exp(-35 * pd_)) / (1 - np.exp(-35))
+    r = 0.03 * w + 0.16 * (1 - w)
+    cond = stats.norm.cdf((stats.norm.ppf(pd_) + np.sqrt(r) * stats.norm.ppf(0.999)) / np.sqrt(1 - r))
+    return np.maximum(lgd * cond - pd_ * lgd, 0.0)
+
+
+def stress_pd(pd_, odds_multiplier):
+    """Scale the odds of default: a uniform logit shift preserving rank order."""
+    pd_ = np.clip(np.asarray(pd_, dtype=float), 1e-6, 1 - 1e-6)
+    odds = pd_ / (1 - pd_) * odds_multiplier
+    return odds / (1 + odds)
+
+
+def grade_economics(pd_, ead, grades, lgd=0.45, funding=0.06, opex=0.03, hurdle=0.15):
+    """Per-grade expected loss, IRB capital and minimum risk-based price (annual rate)."""
+    df = pd.DataFrame({"grade": grades, "pd": np.asarray(pd_), "ead": np.asarray(ead, dtype=float)})
+    df["k"] = irb_retail_k(df["pd"], lgd)
+    df["el"] = df["pd"] * lgd * df["ead"]
+    df["capital"] = df["k"] * df["ead"]
+    t = df.groupby("grade").agg(
+        applicants=("pd", "size"), avg_pd=("pd", "mean"), ead=("ead", "sum"),
+        el=("el", "sum"), capital=("capital", "sum"),
+    ).reindex([g for g in GRADE_ORDER if g in set(grades)]).reset_index()
+    t["el_rate"] = t["el"] / t["ead"]
+    t["k_rate"] = t["capital"] / t["ead"]
+    t["rwa"] = t["capital"] * 12.5
+    t["min_rate"] = funding + opex + t["el_rate"] + t["k_rate"] * hurdle
+    return t
+
+
+STRESS_SCENARIOS = {
+    "Baseline": {"odds": 1.0, "lgd_add": 0.00},
+    "Adverse": {"odds": 1.5, "lgd_add": 0.05},
+    "Severely adverse": {"odds": 2.25, "lgd_add": 0.10},
+}
+
+
+def stress_test(pd_, ead, lgd=0.45, cutoff_score=None, scenarios=STRESS_SCENARIOS):
+    """Portfolio EL, capital and approval under PD/LGD stress, cut-off score held fixed."""
+    ead = np.asarray(ead, dtype=float)
+    rows = []
+    for name, s in scenarios.items():
+        p = stress_pd(pd_, s["odds"])
+        l = min(lgd + s["lgd_add"], 1.0)
+        scores = pd_to_score(p)
+        grades = score_to_grade(scores)
+        approved = scores >= cutoff_score if cutoff_score is not None else np.ones(len(p), bool)
+        k = irb_retail_k(p, l)
+        rows.append({
+            "scenario": name, "odds_multiplier": s["odds"], "lgd": l,
+            "avg_pd": float(p.mean()),
+            "expected_loss": float((p * l * ead).sum()),
+            "el_rate": float((p * l * ead).sum() / ead.sum()),
+            "capital": float((k * ead).sum()),
+            "rwa": float((k * ead).sum() * 12.5),
+            "approval_rate": float(approved.mean()),
+            "approved_expected_bad_rate": float(p[approved].mean()) if approved.any() else np.nan,
+            "share_grade_ef": float(np.isin(grades, ["E", "F"]).mean()),
+        })
+    return pd.DataFrame(rows)

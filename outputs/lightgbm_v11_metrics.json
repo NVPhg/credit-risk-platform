@@ -1,0 +1,35 @@
+{
+  "model": "LightGBM v1.1",
+  "validation_method": "Stratified random holdout (untouched during tuning)",
+  "roc_auc": 0.7032110656658229,
+  "pr_auc": 0.18179608906023081,
+  "ks": 0.3042243384899859,
+  "brier_score": 0.07073376173933708,
+  "train_roc_auc": 0.7191366779726156,
+  "n_trees": 454,
+  "tuning": {
+    "trials": 40,
+    "best_trial": 20,
+    "validation_auc": 0.6989625365620363,
+    "validation_gap": 0.02306217138736355
+  },
+  "params": {
+    "learning_rate": 0.029604815440977903,
+    "num_leaves": 17,
+    "min_child_samples": 1884,
+    "feature_fraction": 0.8833743200521695,
+    "bagging_fraction": 0.7967853888395972,
+    "lambda_l2": 18.75778333410632,
+    "min_gain_to_split": 0.41986681069005943,
+    "cat_smooth": 61.787812049988815
+  },
+  "monotone_constraints": {
+    "employment_years": -1,
+    "due_date_shortfall_rate": 1,
+    "due_date_shortfall_count": 1,
+    "observed_underpaid_count": 1,
+    "refused_count": 1,
+    "approval_rate": -1
+  },
+  "auc_gap": 0.01592561230679268
+}
