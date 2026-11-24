@@ -145,7 +145,7 @@ def psi_table(expected, actual, bins=10):
 
 
 # --------------------------------------------------------------------------- RAG
-RAG_COLORS = {"Green": "#2BB673", "Amber": "#FFB36B", "Red": "#FF6B7A", "Not assessed": "#8A97A8"}
+RAG_COLORS = {"Green": "#1F9E5A", "Amber": "#D9822B", "Red": "#D64550", "Not assessed": "#7A8699"}
 
 RAG_THRESHOLDS = [
     ("Discrimination (Gini)", "Green ≥ 0.40 · Amber 0.30–0.40 · Red < 0.30"),

@@ -81,7 +81,7 @@ def main():
     profile = tempfile.mkdtemp(prefix="cri-chrome-")
     chrome = subprocess.Popen([
         find_chrome(), "--headless=new", f"--remote-debugging-port={PORT}",
-        f"--user-data-dir={profile}", "--hide-scrollbars", "--force-dark-mode",
+        f"--user-data-dir={profile}", "--hide-scrollbars",
         f"--window-size={WIDTH},{HEIGHT}", "about:blank",
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -95,7 +95,7 @@ def main():
         page = Page(ws_url)
         page.call("Emulation.setDeviceMetricsOverride", width=WIDTH, height=HEIGHT,
                   deviceScaleFactor=SCALE, mobile=False)
-        page.call("Emulation.setEmulatedMedia", features=[{"name": "prefers-color-scheme", "value": "dark"}])
+        page.call("Emulation.setEmulatedMedia", features=[{"name": "prefers-color-scheme", "value": "light"}])
         page.call("Page.navigate", url=args.url)
         for _ in range(60):
             time.sleep(1)

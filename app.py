@@ -61,17 +61,19 @@ if missing:
     st.stop()
 
 # ---------------------------------------------------------------- constants
-NAVY = "#0E1929"
-PANEL = "#142238"
-BORDER = "#253B54"
-TEAL = "#31C6B0"
-BLUE = "#69A8FF"
-ORANGE = "#FFB36B"
-RED = "#FF6B7A"
-MUTED = "#A8B7CA"
-TEXT = "#E7EEF8"
+NAVY = "#0E1929"          # brand ink (headings, dark accents)
+BG = "#F4F6FA"            # page background
+PANEL = "#FFFFFF"         # cards and charts
+BORDER = "#DDE3EC"
+GRIDLINE = "#E8EDF3"
+TEAL = "#0F9F8A"
+BLUE = "#2F6FD6"
+ORANGE = "#E08A2E"
+RED = "#D64550"
+MUTED = "#5F6B7D"
+TEXT = "#1B2433"
 
-PURPLE = "#B490FF"
+PURPLE = "#7E5BD6"
 CHALLENGER = "LightGBM v1.1"
 CH_COL = "lightgbm_v11_score"
 MODELS = {
@@ -83,7 +85,7 @@ MODELS = {
 GAP_NAMES = {"LightGBM v1.0": "LightGBM"}
 
 GRADE_COLORS = {
-    "A": "#2BB673", "B": TEAL, "C": BLUE, "D": ORANGE, "E": "#FF8A5B", "F": RED,
+    "A": "#1F9E5A", "B": TEAL, "C": BLUE, "D": ORANGE, "E": "#E5683A", "F": RED,
 }
 
 FEATURE_LABELS = {
@@ -165,13 +167,17 @@ PORTFOLIO_RATE = pred["target"].mean()
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-.stApp {{ background: {NAVY}; color: {TEXT}; }}
+.stApp {{ background: {BG}; color: {TEXT}; }}
 .stApp, .stApp p, .stApp li, .stApp label, .stApp input, .stApp button, .stApp td, .stApp th,
 .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp [data-testid="stMetricValue"],
 .stApp [data-testid="stMetricLabel"], .stApp [data-baseweb="tab"], .stApp .stCaption,
 .stApp [data-testid="stMarkdownContainer"] {{ font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; }}
 .stApp h3 {{ font-weight: 700; letter-spacing: -0.3px; }}
-[data-testid="stSidebar"] {{ background: #0B1422; border-right: 1px solid {BORDER}; }}
+[data-testid="stSidebar"] {{ background: #FFFFFF; border-right: 1px solid {BORDER}; }}
+.card, .kpi, .insight, .decision, .rating, .reason, [data-testid="stMetric"], .chip, .badge {{
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+}}
+.stApp h1, .stApp h2, .stApp h3, .hero-title {{ color: {NAVY}; }}
 .brand {{ display: flex; align-items: center; gap: 12px; }}
 .brand svg {{ flex: none; }}
 .hero {{ display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 28px; align-items: stretch; margin-bottom: 26px; }}
@@ -191,7 +197,7 @@ st.markdown(f"""
 .kpi {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 14px; padding: 16px 18px; position: relative; overflow: hidden; }}
 .kpi::before {{ content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent, {TEAL}); }}
 .kpi .l {{ color: {MUTED}; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; }}
-.kpi .v {{ color: #F3F7FC; font-size: clamp(22px, 2.1vw, 30px); font-weight: 800; letter-spacing: -0.8px; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }}
+.kpi .v {{ color: {NAVY}; font-size: clamp(22px, 2.1vw, 30px); font-weight: 800; letter-spacing: -0.8px; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }}
 .kpi .s {{ color: {MUTED}; font-size: 13px; }}
 .kpi .s b {{ color: var(--accent, {TEAL}); font-weight: 700; }}
 .section {{ margin: 26px 0 12px; }}
@@ -215,7 +221,7 @@ st.markdown(f"""
     border-radius: 12px; padding: 18px 20px;
 }}
 [data-testid="stMetricLabel"] {{ color: {MUTED}; }}
-[data-testid="stMetricValue"] {{ color: #F3F7FC; }}
+[data-testid="stMetricValue"] {{ color: {NAVY}; }}
 .stTabs [data-baseweb="tab-list"] {{ gap: 20px; flex-wrap: wrap; }}
 .stTabs [aria-selected="true"] {{ color: {TEAL} !important; }}
 .hero-label {{ color: {TEAL}; font-size: 12px; font-weight: 700; letter-spacing: 2px; }}
@@ -234,7 +240,7 @@ st.markdown(f"""
 .insight p {{ margin: 0; color: {TEXT}; font-size: 14px; line-height: 1.5; }}
 .grade-badge {{
     display: inline-block; font-size: 44px; font-weight: 800; line-height: 1;
-    padding: 14px 22px; border-radius: 14px; color: {NAVY};
+    padding: 14px 22px; border-radius: 14px; color: #FFFFFF;
 }}
 .reason {{
     background: {PANEL}; border: 1px solid {BORDER}; border-radius: 10px;
@@ -340,10 +346,10 @@ ADVERSE_REASONS = {
 FONT = "Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"
 pio.templates["cri"] = go.layout.Template(
     layout=dict(
-        font=dict(family=FONT, size=12, color="#DCE6F3"),
-        colorway=[TEAL, BLUE, ORANGE, RED, "#B490FF", "#7BD88F"],
+        font=dict(family=FONT, size=12, color=TEXT),
+        colorway=[TEAL, BLUE, ORANGE, RED, PURPLE, "#4CAF50"],
         title=dict(font=dict(family=FONT, size=14, color=TEXT), x=0, xanchor="left"),
-        hoverlabel=dict(bgcolor=NAVY, bordercolor=BORDER, font=dict(family=FONT, color=TEXT)),
+        hoverlabel=dict(bgcolor=PANEL, bordercolor=BORDER, font=dict(family=FONT, color=TEXT)),
         xaxis=dict(title=dict(font=dict(color=MUTED, size=12)), tickfont=dict(color=MUTED),
                    linecolor=BORDER, ticks=""),
         yaxis=dict(title=dict(font=dict(color=MUTED, size=12)), tickfont=dict(color=MUTED),
@@ -352,12 +358,12 @@ pio.templates["cri"] = go.layout.Template(
         bargap=0.25,
     )
 )
-pio.templates.default = "plotly_dark+cri"
+pio.templates.default = "plotly_white+cri"
 
 
 def chart_style(fig, height=360):
     fig.update_layout(
-        template="plotly_dark+cri",
+        template="plotly_white+cri",
         paper_bgcolor=PANEL,
         plot_bgcolor=PANEL,
         height=height,
@@ -371,7 +377,7 @@ def chart_style(fig, height=360):
             title=dict(x=0.01, xanchor="left", y=0.97, yanchor="top", yref="container"),
         )
     fig.update_xaxes(showgrid=False, zeroline=False)
-    fig.update_yaxes(gridcolor="#263A50", zeroline=False)
+    fig.update_yaxes(gridcolor=GRIDLINE, zeroline=False)
     return fig
 
 
@@ -614,7 +620,7 @@ def lorenz_chart():
     )
     chart_style(fig, 380)
     fig.update_layout(legend=dict(orientation="v", x=0.98, y=0.04, xanchor="right", yanchor="bottom",
-                                  bgcolor="rgba(14,25,41,0.85)", bordercolor=BORDER, borderwidth=1))
+                                  bgcolor="rgba(255,255,255,0.9)", bordercolor=BORDER, borderwidth=1))
     return fig
 
 
@@ -1221,7 +1227,7 @@ with strategy_tab:
         fig.add_trace(go.Scatter(
             x=sample["approval_rate"] * 100, y=sample["profit"],
             name="Cumulative profit", line=dict(color=color, width=3),
-            fill="tozeroy", fillcolor="rgba(49,198,176,0.12)",
+            fill="tozeroy", fillcolor="rgba(15,159,138,0.12)",
         ))
         fig.add_trace(go.Scatter(
             x=[best_row["approval_rate"] * 100], y=[best_row["profit"]],
@@ -1337,9 +1343,9 @@ with capital_tab:
     with left:
         fig = go.Figure()
         fig.add_trace(go.Bar(x=econ["grade"], y=[cap_funding * 100] * len(econ), name="Funding",
-                             marker_color="#3B4B63"))
+                             marker_color="#B8C2D0"))
         fig.add_trace(go.Bar(x=econ["grade"], y=[cap_opex * 100] * len(econ), name="Operating cost",
-                             marker_color="#52627A"))
+                             marker_color="#D5DCE6"))
         fig.add_trace(go.Bar(x=econ["grade"], y=econ["el_rate"] * 100, name="Expected loss",
                              marker_color=ORANGE))
         fig.add_trace(go.Bar(x=econ["grade"], y=econ["k_rate"] * cap_hurdle * 100,
@@ -1405,7 +1411,7 @@ with capital_tab:
         ))
         fig.add_trace(go.Bar(
             x=stress["scenario"], y=stress["capital"], name="IRB capital",
-            marker_color=["rgba(49,198,176,.45)", "rgba(255,179,107,.45)", "rgba(255,107,122,.45)"],
+            marker_color=["rgba(15,159,138,.4)", "rgba(224,138,46,.4)", "rgba(214,69,80,.4)"],
             text=[fmt_money(v) for v in stress["capital"]], textposition="outside", offsetgroup=1,
         ))
         fig.update_layout(barmode="group", yaxis_title="Amount",
@@ -1708,7 +1714,7 @@ with applicant_tab:
     # ---- credit decision (illustrative policy: 80% approval cut-off, 10-point refer band)
     cutoff_score = pd_to_score(np.quantile(pred[CH_COL], 0.80))
     if score_value >= cutoff_score:
-        decision, dcolor = "Approve", "#2BB673"
+        decision, dcolor = "Approve", "#1F9E5A"
         why = f"Score {score_value:.0f} is at or above the cut-off of {cutoff_score:.0f}."
     elif score_value >= cutoff_score - 10:
         decision, dcolor = "Refer to underwriter", ORANGE
@@ -1972,7 +1978,7 @@ with validation_tab:
         fig.add_trace(go.Scatter(
             x=trials["user_attrs_gap"], y=trials["user_attrs_val_auc"], mode="markers",
             marker=dict(size=10, color=trials["value"], colorscale=[[0, BORDER], [1, BLUE]],
-                        line=dict(width=1, color=NAVY)),
+                        line=dict(width=1, color=PANEL)),
             name="Optuna trial",
             customdata=np.stack([trials["number"], trials["user_attrs_best_iteration"]], axis=1),
             hovertemplate="Trial %{customdata[0]}<br>Validation AUC %{y:.4f}<br>"
@@ -1981,7 +1987,7 @@ with validation_tab:
         b = trials[trials["number"] == best_n]
         fig.add_trace(go.Scatter(
             x=b["user_attrs_gap"], y=b["user_attrs_val_auc"], mode="markers+text",
-            marker=dict(size=18, color=TEAL, symbol="star", line=dict(width=1, color=NAVY)),
+            marker=dict(size=18, color=TEAL, symbol="star", line=dict(width=1, color=PANEL)),
             text=["Selected"], textposition="top center", name="Selected (v1.1)",
         ))
         fig.update_layout(
